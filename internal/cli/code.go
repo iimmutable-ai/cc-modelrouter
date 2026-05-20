@@ -460,6 +460,19 @@ func runCode(cmd *cobra.Command, rawArgs []string) error {
 		fmt.Printf("Created %s for profile switching\n", profileCmdPath)
 	}
 
+	// Propagate settings into existing worktree directories
+	propagateSettingsToWorktrees(projectRoot, actualAddr)
+
+	// Start watching for new worktree creation during the session
+	watcherCtx, watcherCancel := context.WithCancel(context.Background())
+	defer watcherCancel()
+	if stopWatcher, err := startWorktreeWatcher(watcherCtx, projectRoot, actualAddr); err == nil {
+		defer stopWatcher()
+		fmt.Println("Watching for new worktrees")
+	} else {
+		fmt.Fprintf(os.Stderr, "Warning: worktree watcher failed: %v\n", err)
+	}
+
 	// Set environment variable for Claude Code (as backup)
 	os.Setenv("ANTHROPIC_BASE_URL", fmt.Sprintf("http://%s", actualAddr))
 
@@ -494,20 +507,45 @@ func runCode(cmd *cobra.Command, rawArgs []string) error {
 	// Wait for either Claude to finish or a signal
 	select {
 	case err := <-errChan:
-		// Claude finished
 		if err != nil {
+			// Error exit — immediate cleanup
 			fmt.Fprintf(os.Stderr, "Claude exited with error: %v\n", err)
+		} else {
+			// Clean exit — might be worktree switch or subagents still running.
+			// Keep proxy alive while connections are active.
+			fmt.Println("Claude Code exited — waiting up to 120s for active connections...")
+			graceDeadline := time.After(120 * time.Second)
+			ticker := time.NewTicker(2 * time.Second)
+		graceLoop:
+			for {
+				select {
+				case <-ticker.C:
+					conns := server.ActiveConnections()
+					if conns == 0 {
+						fmt.Println("All connections closed, shutting down")
+						break graceLoop
+					}
+					fmt.Printf("  %d active connection(s) remaining...\n", conns)
+				case <-graceDeadline:
+					fmt.Println("Grace period expired, shutting down")
+					break graceLoop
+				case sig := <-sigChan:
+					fmt.Printf("\nReceived signal %v during grace period, shutting down...\n", sig)
+					break graceLoop
+				}
+			}
+			ticker.Stop()
 		}
 	case sig := <-sigChan:
-		// Signal received
+		// Signal received — forward to Claude and shut down immediately
 		fmt.Printf("\nReceived signal %v, shutting down...\n", sig)
-		// Kill Claude process
 		if claudeCmd.Process != nil {
 			claudeCmd.Process.Signal(sig)
 		}
 	}
 
 	// Cleanup
+	cleanupWorktreeSettings(projectRoot, actualAddr)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	server.Stop(ctx)
