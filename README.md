@@ -140,10 +140,14 @@ Routes are detected automatically from request characteristics. Configure which 
 | `thinkMore` | `budget_tokens >= 10,000` | Complex refactoring |
 | `think` | `budget_tokens >= 4,000` | Standard reasoning tasks |
 | `background` | Background agent flag | File indexing, linting |
+| `subagent` | Tool names contain "agent"/"subagent" or prompt contains "subagent"/"delegate to agent" | Delegated agent tasks |
+| `review` | Tool names contain "review" or prompt contains "/review"/"code review" | Code review, PR review |
 | `image` | Request contains image blocks | Screenshot analysis, UI review |
 | `webSearch` | Tool names contain "web"/"search" | Research-heavy tasks |
 | `longContext` | Token count > 60,000 | Large codebase analysis |
 | `default` | Fallback | Everything else |
+
+**Priority order:** Routes are checked in this order: `background` → `subagent` → `review` → `ultrathink` → `thinkMore` → `think` → `image` → `webSearch` → `longContext` → `default`.
 
 **Thinking level cascade:** If `ultrathink` is not configured, it falls back to `thinkMore`, then `think`.
 

@@ -228,13 +228,31 @@ ccrouter clean [flags]
 
 **Flags:**
 ```
-  -a, --all   Remove all instance files including running ones
+  -a, --all              Remove all instance files including running ones
+                          Use with caution - this will remove metadata for active instances
+      --usage-before <d> Prune usage records older than the given duration
+                          Duration format: 30d (days), 24h (hours), 90m (minutes)
+      --usage-all        Delete all usage records
+```
+
+**Examples:**
+```bash
+# Prune usage records older than 30 days
+ccrouter clean --usage-before 30d
+
+# Delete all usage records
+ccrouter clean --usage-all
+
+# Combined: prune old usage + clean stale instances
+ccrouter clean --usage-before 30d
 ```
 
 **Description:**
 - Removes metadata files for instances that are no longer running
 - Useful for cleanup after crashes or manual process termination
 - Use `--all` with caution — stops and removes all instances
+- Use `--usage-before` to prune old usage tracking data from the database
+- Use `--usage-all` to completely reset usage tracking
 
 ---
 
