@@ -177,6 +177,8 @@ var ProviderPresets = map[string]ProviderPreset{
 var PredefinedRouteNames = []string{
 	"default",
 	"background",
+	"subagent",
+	"review",
 	"think",
 	"thinkMore",
 	"ultrathink",

@@ -339,6 +339,8 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 		TokenCount:   h.estimateTokens(req),
 		HasWebSearch: h.hasWebSearch(req),
 		HasImages:    h.hasImages(req),
+		IsReview:     h.isReview(req),
+		IsSubagent:   h.isSubagent(req),
 	}
 	routeName := h.router.DetectRoute(routeReq)
 	targets := h.router.GetTargets(routeName)
@@ -992,6 +994,72 @@ func (h *Handler) getThinkLevel(req *anthropic.Request) router.ThinkLevel {
 	default:
 		return router.ThinkBasic // Any non-zero budget is at least basic
 	}
+}
+
+// isReview checks if the request is a review task based on tools or content.
+func (h *Handler) isReview(req *anthropic.Request) bool {
+	// Check tool names for review indicators
+	for _, tool := range req.Tools {
+		toolName := strings.ToLower(tool.Name)
+		if strings.Contains(toolName, "review") {
+			return true
+		}
+	}
+
+	// Check message content for review keywords
+	for _, msg := range req.Messages {
+		if msg.Role == "user" {
+			for _, block := range msg.Content {
+				if block.Type == "text" {
+					text := strings.ToLower(block.Text)
+					if strings.Contains(text, "/review") ||
+						strings.Contains(text, "code review") ||
+						strings.Contains(text, "review this") ||
+						strings.Contains(text, "review the") ||
+						strings.HasPrefix(text, "review ") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// isSubagent checks if the request is a subagent task based on tools or content.
+func (h *Handler) isSubagent(req *anthropic.Request) bool {
+	// Check tool names for agent/subagent indicators
+	for _, tool := range req.Tools {
+		toolName := strings.ToLower(tool.Name)
+		if strings.Contains(toolName, "subagent") ||
+			strings.Contains(toolName, "agent") ||
+			strings.Contains(toolName, "delegate") ||
+			strings.Contains(toolName, "dispatch") {
+			return true
+		}
+	}
+
+	// Check message content for subagent keywords
+	for _, msg := range req.Messages {
+		if msg.Role == "user" {
+			for _, block := range msg.Content {
+				if block.Type == "text" {
+					text := strings.ToLower(block.Text)
+					if strings.Contains(text, "subagent") ||
+						strings.Contains(text, "delegate to agent") ||
+						strings.Contains(text, "dispatch agent") ||
+						strings.Contains(text, "spawn agent") ||
+						strings.Contains(text, "run this in parallel") ||
+						strings.Contains(text, "use an agent to") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // handleModels returns the available models from all configured providers.
