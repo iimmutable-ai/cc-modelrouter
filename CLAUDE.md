@@ -301,13 +301,15 @@ Router automatically selects routes based on request characteristics (priority o
 | Priority | Route | Trigger | Detection Method |
 |----------|-------|---------|-----------------|
 | 1 | `background` | Background agent request | `IsBackground` flag on request |
-| 2 | `ultrathink` | Maximum thinking | `budget_tokens >= 32,000` |
-| 3 | `thinkMore` | Enhanced thinking | `budget_tokens >= 10,000` |
-| 4 | `think` | Basic thinking | `budget_tokens >= 4,000` |
-| 5 | `image` | Image content | Request contains image blocks |
-| 6 | `webSearch` | Web search enabled | Tool names contain "web"/"search" |
-| 7 | `longContext` | Large context | Token count > 60,000 |
-| 8 | `default` | Fallback | All other requests |
+| 2 | `subagent` | Subagent task | Tool names contain "agent"/"subagent" or prompt contains "subagent"/"delegate to agent" |
+| 3 | `review` | Review task | Tool names contain "review" or prompt contains "/review"/"code review" |
+| 4 | `ultrathink` | Maximum thinking | `budget_tokens >= 32,000` |
+| 5 | `thinkMore` | Enhanced thinking | `budget_tokens >= 10,000` |
+| 6 | `think` | Basic thinking | `budget_tokens >= 4,000` |
+| 7 | `image` | Image content | Request contains image blocks |
+| 8 | `webSearch` | Web search enabled | Tool names contain "web"/"search" |
+| 9 | `longContext` | Large context | Token count > 60,000 |
+| 10 | `default` | Fallback | All other requests |
 
 **Thinking level fallback:** If `ultrathink` not configured, falls back to `thinkMore`, then `think`.
 

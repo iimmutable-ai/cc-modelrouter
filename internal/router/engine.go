@@ -34,6 +34,8 @@ type RouteRequest struct {
 	TokenCount   int
 	HasWebSearch bool
 	HasImages    bool
+	IsReview     bool // Detected review task
+	IsSubagent   bool // Detected subagent task
 }
 
 // Engine handles route detection and target selection.
@@ -81,6 +83,18 @@ func (e *Engine) DetectRoute(req RouteRequest) string {
 	case req.IsBackground:
 		if route, ok := routes["background"]; ok && route != "" {
 			return "background"
+		}
+
+	case req.IsSubagent:
+		// Subagent tasks - high priority after background
+		if route, ok := routes["subagent"]; ok && route != "" {
+			return "subagent"
+		}
+
+	case req.IsReview:
+		// Review tasks
+		if route, ok := routes["review"]; ok && route != "" {
+			return "review"
 		}
 
 	case req.ThinkLevel >= ThinkHighest:

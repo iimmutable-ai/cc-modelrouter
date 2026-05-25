@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/iimmutable/cc-modelrouter/internal/config"
@@ -42,6 +43,7 @@ type Server struct {
 	running      bool
 	ready        chan struct{} // Closed when server is ready to accept connections
 	actualAddr   string        // Actual bound address (differs from config when port is 0)
+	activeConns  atomic.Int32  // Tracks in-flight HTTP requests
 }
 
 // NewServer creates a new proxy server.
@@ -168,7 +170,7 @@ func (s *Server) Start() error {
 
 	s.server = &http.Server{
 		Addr:         addr,
-		Handler:      s.handler,
+		Handler:      s, // Use Server as handler to track active connections
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 5 * time.Minute, // Long for streaming
 		ErrorLog:     log.New(errorLogWriter, "", 0), // No prefix, uses our logging
@@ -242,4 +244,16 @@ func (s *Server) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running
+}
+
+// ActiveConnections returns the number of currently in-flight HTTP requests.
+func (s *Server) ActiveConnections() int32 {
+	return s.activeConns.Load()
+}
+
+// ServeHTTP wraps the handler with connection tracking for the grace period logic.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.activeConns.Add(1)
+	defer s.activeConns.Add(-1)
+	s.handler.ServeHTTP(w, r)
 }

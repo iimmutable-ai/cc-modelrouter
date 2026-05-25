@@ -608,3 +608,78 @@ func TestProfileFallbackToLegacy(t *testing.T) {
 		})
 	}
 }
+
+func TestReviewAndSubagentRoutes(t *testing.T) {
+	cfg := &config.Config{
+		Router: config.RouterConfig{
+			Routes: map[string]string{
+				"default":  "provider:default-model",
+				"review":   "provider:review-model",
+				"subagent": "provider:subagent-model",
+			},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	tests := []struct {
+		name     string
+		req      RouteRequest
+		expected string
+	}{
+		{
+			name:     "subagent route",
+			req:      RouteRequest{IsSubagent: true},
+			expected: "subagent",
+		},
+		{
+			name:     "review route",
+			req:      RouteRequest{IsReview: true},
+			expected: "review",
+		},
+		{
+			name:     "subagent takes priority over review",
+			req:      RouteRequest{IsSubagent: true, IsReview: true},
+			expected: "subagent",
+		},
+		{
+			name:     "subagent takes priority over think",
+			req:      RouteRequest{IsSubagent: true, ThinkLevel: ThinkHighest},
+			expected: "subagent",
+		},
+		{
+			name:     "review takes priority over think",
+			req:      RouteRequest{IsReview: true, ThinkLevel: ThinkHighest},
+			expected: "review",
+		},
+		{
+			name:     "review falls back to default when not configured",
+			req:      RouteRequest{IsReview: true},
+			expected: "default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// For the fallback test, use a config without review route
+			var testEngine *Engine
+			if tt.name == "review falls back to default when not configured" {
+				testCfg := &config.Config{
+					Router: config.RouterConfig{
+						Routes: map[string]string{
+							"default": "provider:default-model",
+						},
+					},
+				}
+				testEngine = NewEngine(testCfg)
+			} else {
+				testEngine = engine
+			}
+
+			route := testEngine.DetectRoute(tt.req)
+			if route != tt.expected {
+				t.Errorf("expected route %s, got %s", tt.expected, route)
+			}
+		})
+	}
+}
