@@ -1794,3 +1794,226 @@ func TestServeHTTP_AdminNotInitialized(t *testing.T) {
 		t.Errorf("expected 'Admin API not initialized' in body, got: %s", w.Body.String())
 	}
 }
+
+// TestIsReview verifies that isReview() only triggers on genuine review
+// indicators and does NOT false-positive on MCP plugin CRUD tools.
+func TestIsReview(t *testing.T) {
+	handler := NewHandler(10 * 1024 * 1024)
+
+	tests := []struct {
+		name string
+		req  *anthropic.Request
+		want bool
+	}{
+		{
+			name: "MCP create_pull_request_review tool should not match",
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "create_pull_request_review"},
+					{Name: "Bash"},
+					{Name: "Read"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Fix the bug in main.go"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "MCP get_pull_request_review tool should not match",
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "get_pull_request_review"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Show me the PR details"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "user message with /review should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "/review"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "user message with code review should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Please do a code review of this PR"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "user message starting with review should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "review this implementation"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "user message with review this should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Can you review this code?"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "user message with review the should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Please review the changes"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "normal request with no review indicators",
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "Bash"},
+					{Name: "Read"},
+					{Name: "Write"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Hello, how are you?"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "assistant message with /review should not match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleAssistant, Content: []anthropic.ContentBlock{{Type: "text", Text: "I will /review this code"}}},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := handler.isReview(tt.req)
+			if got != tt.want {
+				t.Errorf("isReview() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsSubagent verifies that isSubagent() only triggers on genuine subagent
+// indicators and does NOT false-positive on Claude Code's generic "Agent" tool.
+func TestIsSubagent(t *testing.T) {
+	handler := NewHandler(10 * 1024 * 1024)
+
+	tests := []struct {
+		name string
+		req  *anthropic.Request
+		want bool
+	}{
+		{
+			name: "normal request with Agent tool should not match",
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "Agent"},
+					{Name: "Bash"},
+					{Name: "Read"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Fix the bug in main.go"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "tool named subagent_dispatch should match",
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "subagent_dispatch"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "do something"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "user message mentioning subagent should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Please run this as a subagent task"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "user message mentioning delegate to agent should match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "delegate to agent for processing"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "run this in parallel should NOT match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "run this in parallel with the other task"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "use an agent to should NOT match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "use an agent to help with this"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "normal request with no subagent indicators",
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "Bash"},
+					{Name: "Read"},
+					{Name: "Write"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Hello, how are you?"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "assistant message with subagent should not match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleAssistant, Content: []anthropic.ContentBlock{{Type: "text", Text: "I will use a subagent for this"}}},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := handler.isSubagent(tt.req)
+			if got != tt.want {
+				t.Errorf("isSubagent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

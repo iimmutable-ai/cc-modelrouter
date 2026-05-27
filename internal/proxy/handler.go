@@ -345,7 +345,8 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 	routeName := h.router.DetectRoute(routeReq)
 	targets := h.router.GetTargets(routeName)
 
-	logging.Infof("[ROUTE] Detected: %s, Targets: %d", routeName, len(targets))
+	logging.Infof("[ROUTE] Detected: %s (bg=%v sub=%v review=%v think=%d img=%v web=%v tokens=%d), Targets: %d",
+		routeName, routeReq.IsBackground, routeReq.IsSubagent, routeReq.IsReview, routeReq.ThinkLevel, routeReq.HasImages, routeReq.HasWebSearch, routeReq.TokenCount, len(targets))
 
 	// Handle streaming requests
 	if req.Stream {
@@ -996,16 +997,10 @@ func (h *Handler) getThinkLevel(req *anthropic.Request) router.ThinkLevel {
 	}
 }
 
-// isReview checks if the request is a review task based on tools or content.
+// isReview checks if the request is a review task based on message content.
+// Note: /review is a slash command (user message), not a tool.
+// MCP tools like create_pull_request_review are CRUD operations, not review task indicators.
 func (h *Handler) isReview(req *anthropic.Request) bool {
-	// Check tool names for review indicators
-	for _, tool := range req.Tools {
-		toolName := strings.ToLower(tool.Name)
-		if strings.Contains(toolName, "review") {
-			return true
-		}
-	}
-
 	// Check message content for review keywords
 	for _, msg := range req.Messages {
 		if msg.Role == "user" {
@@ -1029,13 +1024,10 @@ func (h *Handler) isReview(req *anthropic.Request) bool {
 
 // isSubagent checks if the request is a subagent task based on tools or content.
 func (h *Handler) isSubagent(req *anthropic.Request) bool {
-	// Check tool names for agent/subagent indicators
+	// Check tool names for subagent indicators
 	for _, tool := range req.Tools {
 		toolName := strings.ToLower(tool.Name)
-		if strings.Contains(toolName, "subagent") ||
-			strings.Contains(toolName, "agent") ||
-			strings.Contains(toolName, "delegate") ||
-			strings.Contains(toolName, "dispatch") {
+		if strings.Contains(toolName, "subagent") {
 			return true
 		}
 	}
@@ -1047,11 +1039,7 @@ func (h *Handler) isSubagent(req *anthropic.Request) bool {
 				if block.Type == "text" {
 					text := strings.ToLower(block.Text)
 					if strings.Contains(text, "subagent") ||
-						strings.Contains(text, "delegate to agent") ||
-						strings.Contains(text, "dispatch agent") ||
-						strings.Contains(text, "spawn agent") ||
-						strings.Contains(text, "run this in parallel") ||
-						strings.Contains(text, "use an agent to") {
+						strings.Contains(text, "delegate to agent") {
 						return true
 					}
 				}

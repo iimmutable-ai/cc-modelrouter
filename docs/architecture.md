@@ -101,13 +101,15 @@ Determines which provider and model to use for each request.
 | Priority | Route | Trigger Condition | Detection Method |
 |----------|-------|-------------------|------------------|
 | 1 | `background` | Background agent | `IsBackground` flag on request |
-| 2 | `ultrathink` | Highest thinking | `budget_tokens >= 32,000` |
-| 3 | `thinkMore` | Middle thinking | `budget_tokens >= 10,000` |
-| 4 | `think` | Basic thinking | `budget_tokens >= 4,000` |
-| 5 | `image` | Image content | Request contains image blocks |
-| 6 | `webSearch` | Web search enabled | Tool names contain "web"/"search" |
-| 7 | `longContext` | Large context | Token count > 60,000 |
-| 8 | `default` | Fallback | All other requests |
+| 2 | `subagent` | Subagent task | Prompt contains "subagent"/"delegate to agent" |
+| 3 | `review` | Review task | Prompt contains "/review", "code review", or starts with "review " |
+| 4 | `ultrathink` | Highest thinking | `budget_tokens >= 32,000` |
+| 5 | `thinkMore` | Middle thinking | `budget_tokens >= 10,000` |
+| 6 | `think` | Basic thinking | `budget_tokens >= 4,000` |
+| 7 | `image` | Image content | Request contains image blocks |
+| 8 | `webSearch` | Web search enabled | Tool names contain "web"/"search" |
+| 9 | `longContext` | Large context | Token count > 60,000 |
+| 10 | `default` | Fallback | All other requests |
 
 **Thinking Levels:**
 

@@ -657,13 +657,19 @@ func TestReviewAndSubagentRoutes(t *testing.T) {
 			req:      RouteRequest{IsReview: true},
 			expected: "default",
 		},
+		{
+			name:     "subagent falls back to default when not configured",
+			req:      RouteRequest{IsSubagent: true},
+			expected: "default",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// For the fallback test, use a config without review route
+			// For fallback tests, use a config without the specific route
 			var testEngine *Engine
-			if tt.name == "review falls back to default when not configured" {
+			if tt.name == "review falls back to default when not configured" ||
+				tt.name == "subagent falls back to default when not configured" {
 				testCfg := &config.Config{
 					Router: config.RouterConfig{
 						Routes: map[string]string{

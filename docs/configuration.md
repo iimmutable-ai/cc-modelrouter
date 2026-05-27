@@ -285,13 +285,15 @@ If you prefer, you can combine all OpenRouter models into a single provider:
 | Priority | Route | Description | Trigger | Detection Method |
 |----------|-------|-------------|---------|------------------|
 | 1 | `background` | Background tasks | Background agent request | `IsBackground` flag on request |
-| 2 | `ultrathink` | Maximum thinking | "ultrathink", "think harder" | `budget_tokens >= 32,000` |
-| 3 | `thinkMore` | Enhanced thinking | "think hard", "think more" | `budget_tokens >= 10,000` |
-| 4 | `think` | Basic thinking | "think" trigger phrase | `budget_tokens >= 4,000` |
-| 5 | `image` | Image processing | Images in request | Request contains image blocks |
-| 6 | `webSearch` | Web search enabled | Web search tools | Tool names contain "web"/"search" |
-| 7 | `longContext` | Long conversations | Large context | Token count > 60,000 |
-| 8 | `default` | Default fallback | All unmatched requests | - |
+| 2 | `subagent` | Subagent tasks | Prompt contains "subagent"/"delegate to agent" | Message content analysis |
+| 3 | `review` | Review tasks | Prompt contains "/review", "code review", or starts with "review " | Message content analysis |
+| 4 | `ultrathink` | Maximum thinking | "ultrathink", "think harder" | `budget_tokens >= 32,000` |
+| 5 | `thinkMore` | Enhanced thinking | "think hard", "think more" | `budget_tokens >= 10,000` |
+| 6 | `think` | Basic thinking | "think" trigger phrase | `budget_tokens >= 4,000` |
+| 7 | `image` | Image processing | Images in request | Request contains image blocks |
+| 8 | `webSearch` | Web search enabled | Web search tools | Tool names contain "web"/"search" |
+| 9 | `longContext` | Long conversations | Large context | Token count > 60,000 |
+| 10 | `default` | Default fallback | All unmatched requests | - |
 
 ### Thinking Levels
 

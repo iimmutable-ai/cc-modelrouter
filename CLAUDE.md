@@ -301,8 +301,8 @@ Router automatically selects routes based on request characteristics (priority o
 | Priority | Route | Trigger | Detection Method |
 |----------|-------|---------|-----------------|
 | 1 | `background` | Background agent request | `IsBackground` flag on request |
-| 2 | `subagent` | Subagent task | Tool names contain "agent"/"subagent" or prompt contains "subagent"/"delegate to agent" |
-| 3 | `review` | Review task | Tool names contain "review" or prompt contains "/review"/"code review" |
+| 2 | `subagent` | Subagent task | Tool names contain "subagent" or prompt contains "subagent"/"delegate to agent" |
+| 3 | `review` | Review task | Prompt contains "/review", "code review", or starts with "review " |
 | 4 | `ultrathink` | Maximum thinking | `budget_tokens >= 32,000` |
 | 5 | `thinkMore` | Enhanced thinking | `budget_tokens >= 10,000` |
 | 6 | `think` | Basic thinking | `budget_tokens >= 4,000` |
