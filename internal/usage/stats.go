@@ -35,7 +35,7 @@ func AggregateSummary(records []*Record) Summary {
 	return s
 }
 
-// AggregateByRoute groups records by profile/provider.route.
+// AggregateByRoute groups records by profile/route.
 func AggregateByRoute(records []*Record) map[string]*RouteStats {
 	result := make(map[string]*RouteStats)
 	for _, r := range records {
@@ -43,10 +43,10 @@ func AggregateByRoute(records []*Record) map[string]*RouteStats {
 		if profile == "" {
 			profile = "default"
 		}
-		key := profile + "/" + r.Provider + "." + r.Route
+		key := profile + "/" + r.Route
 		stats, ok := result[key]
 		if !ok {
-			stats = &RouteStats{Profile: profile, Route: r.Provider + "." + r.Route}
+			stats = &RouteStats{Profile: profile, Route: r.Route}
 			result[key] = stats
 		}
 		stats.Requests++

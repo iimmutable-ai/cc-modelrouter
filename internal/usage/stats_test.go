@@ -35,54 +35,42 @@ func TestAggregateByRoute(t *testing.T) {
 
 	byRoute := AggregateByRoute(records)
 
-	// Should have 3 composite keys
-	if len(byRoute) != 3 {
-		t.Fatalf("expected 3 routes, got %d", len(byRoute))
+	// Should have 2 composite keys (openrouter + bigmodel /think merged)
+	if len(byRoute) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(byRoute))
 	}
 
-	// Check cost-saving/openrouter./think
-	think := byRoute["cost-saving/openrouter./think"]
+	// Check cost-saving//think (openrouter + bigmodel merged)
+	think := byRoute["cost-saving//think"]
 	if think == nil {
-		t.Fatal("expected cost-saving/openrouter./think key to exist")
+		t.Fatal("expected cost-saving//think key to exist")
 	}
-	if think.Requests != 2 {
-		t.Errorf("cost-saving/openrouter./think requests = %d, want 2", think.Requests)
+	if think.Requests != 3 {
+		t.Errorf("cost-saving//think requests = %d, want 3", think.Requests)
 	}
-	if think.Tokens != 150 {
-		t.Errorf("cost-saving/openrouter./think tokens = %d, want 150", think.Tokens)
+	if think.Tokens != 350 {
+		t.Errorf("cost-saving//think tokens = %d, want 350", think.Tokens)
 	}
 	if think.Profile != "cost-saving" {
-		t.Errorf("cost-saving/openrouter./think profile = %s, want cost-saving", think.Profile)
+		t.Errorf("cost-saving//think profile = %s, want cost-saving", think.Profile)
 	}
-	if think.Route != "openrouter./think" {
-		t.Errorf("Route field = %s, want openrouter./think", think.Route)
+	if think.Route != "/think" {
+		t.Errorf("Route field = %s, want /think", think.Route)
 	}
-
-	// Check cost-saving/bigmodel./think
-	bigThink := byRoute["cost-saving/bigmodel./think"]
-	if bigThink == nil {
-		t.Fatal("expected cost-saving/bigmodel./think key to exist")
-	}
-	if bigThink.Requests != 1 {
-		t.Errorf("cost-saving/bigmodel./think requests = %d, want 1", bigThink.Requests)
-	}
-	if bigThink.Tokens != 200 {
-		t.Errorf("cost-saving/bigmodel./think tokens = %d, want 200", bigThink.Tokens)
-	}
-	if bigThink.Fallbacks != 1 {
-		t.Errorf("cost-saving/bigmodel./think fallbacks = %d, want 1", bigThink.Fallbacks)
+	if think.Fallbacks != 1 {
+		t.Errorf("cost-saving//think fallbacks = %d, want 1", think.Fallbacks)
 	}
 
-	// Check cost-saving/openrouter./ultrathink
-	ultra := byRoute["cost-saving/openrouter./ultrathink"]
+	// Check cost-saving//ultrathink
+	ultra := byRoute["cost-saving//ultrathink"]
 	if ultra == nil {
-		t.Fatal("expected cost-saving/openrouter./ultrathink key to exist")
+		t.Fatal("expected cost-saving//ultrathink key to exist")
 	}
 	if ultra.Requests != 1 {
-		t.Errorf("cost-saving/openrouter./ultrathink requests = %d, want 1", ultra.Requests)
+		t.Errorf("cost-saving//ultrathink requests = %d, want 1", ultra.Requests)
 	}
 	if ultra.Tokens != 300 {
-		t.Errorf("cost-saving/openrouter./ultrathink tokens = %d, want 300", ultra.Tokens)
+		t.Errorf("cost-saving//ultrathink tokens = %d, want 300", ultra.Tokens)
 	}
 }
 
@@ -141,9 +129,9 @@ func TestAggregateByRoute_LegacyEmptyProvider(t *testing.T) {
 		t.Fatalf("expected 1 route, got %d", len(byRoute))
 	}
 
-	stats := byRoute["default/./think"]
+	stats := byRoute["default//think"]
 	if stats == nil {
-		t.Fatal("expected default/./think key for legacy records")
+		t.Fatal("expected default//think key for legacy records")
 	}
 	if stats.Requests != 2 {
 		t.Errorf("requests = %d, want 2", stats.Requests)
@@ -171,9 +159,9 @@ func TestAggregateByRoute_SeparateProfiles(t *testing.T) {
 		t.Fatalf("expected 2 routes (separate profiles), got %d", len(byRoute))
 	}
 
-	costSaving := byRoute["cost-saving/openrouter./think"]
+	costSaving := byRoute["cost-saving//think"]
 	if costSaving == nil {
-		t.Fatal("expected cost-saving/openrouter./think key")
+		t.Fatal("expected cost-saving//think key")
 	}
 	if costSaving.Requests != 2 {
 		t.Errorf("cost-saving requests = %d, want 2", costSaving.Requests)
@@ -185,9 +173,9 @@ func TestAggregateByRoute_SeparateProfiles(t *testing.T) {
 		t.Errorf("cost-saving fallbacks = %d, want 1", costSaving.Fallbacks)
 	}
 
-	perf := byRoute["performance/openrouter./think"]
+	perf := byRoute["performance//think"]
 	if perf == nil {
-		t.Fatal("expected performance/openrouter./think key")
+		t.Fatal("expected performance//think key")
 	}
 	if perf.Requests != 2 {
 		t.Errorf("performance requests = %d, want 2", perf.Requests)
@@ -244,9 +232,9 @@ func TestAggregateByRoute_EmptyProfileDefaults(t *testing.T) {
 		t.Fatalf("expected 1 route, got %d", len(byRoute))
 	}
 
-	stats := byRoute["default/openrouter./think"]
+	stats := byRoute["default//think"]
 	if stats == nil {
-		t.Fatal("expected default/openrouter./think key")
+		t.Fatal("expected default//think key")
 	}
 	if stats.Requests != 2 {
 		t.Errorf("requests = %d, want 2", stats.Requests)
