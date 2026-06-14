@@ -284,15 +284,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Multi-user authentication: extract Bearer token and authenticate
 	var userInfo *auth.UserInfo
 	if h.multiUserEnabled {
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
+		logging.Warnf("[AUTH-DIAG] Incoming request: %s %s | Authorization: %s | X-Api-Key: %s",
+			r.Method, r.URL.Path,
+			truncateHeader(r.Header.Get("Authorization")),
+			truncateHeader(r.Header.Get("x-api-key")))
+
+		var token string
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+		if token == "" {
+			token = r.Header.Get("x-api-key")
+		}
+		if token == "" {
 			WriteAuthError(w, http.StatusUnauthorized, "Missing or invalid Authorization header")
 			return
 		}
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+		logging.Warnf("[AUTH] Extracted token prefix: %s", truncateToken(token))
 
 		info, err := h.authInterceptor.Authenticate(token)
 		if err != nil {
+			logging.Warnf("[AUTH] Authentication FAILED: %s", err)
 			WriteAuthError(w, http.StatusUnauthorized, err.Error())
 			return
 		}
@@ -1325,6 +1337,27 @@ func generateID() string {
 		b[i] = charset[rand.Intn(len(charset))]
 	}
 	return string(b)
+}
+
+// truncateToken returns the first 12 characters of a token followed by "..." for safe logging.
+func truncateToken(token string) string {
+	if len(token) > 12 {
+		return token[:12] + "..."
+	}
+	return token
+}
+
+// truncateHeader safely logs an Authorization or X-Api-Key header value,
+// showing the scheme (e.g. "Bearer") and a truncated token.
+func truncateHeader(value string) string {
+	if value == "" {
+		return "<empty>"
+	}
+	parts := strings.SplitN(value, " ", 2)
+	if len(parts) == 2 {
+		return parts[0] + " " + truncateToken(parts[1])
+	}
+	return truncateToken(value)
 }
 
 // isErrorCode1213 checks if the response body contains error code 1213

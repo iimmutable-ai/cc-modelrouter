@@ -186,7 +186,7 @@ Add the `multiUser` section to your config:
 
 | Concept | Description |
 |---------|-------------|
-| **API Keys** | `sk-ccrouter-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
+| **API Keys** | `sk-ccr-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
 | **User Groups** | Map keys to routing profiles with QoS settings |
 | **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
 | **Idle Borrowing** | Groups can borrow unused capacity from other groups |
@@ -305,7 +305,7 @@ Add the `multiUser` section to your config:
 
 | Concept | Description |
 |---------|-------------|
-| **API Keys** | `sk-ccrouter-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
+| **API Keys** | `sk-ccr-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
 | **User Groups** | Map keys to routing profiles with QoS settings |
 | **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
 | **Idle Borrowing** | Groups can borrow unused capacity from other groups |

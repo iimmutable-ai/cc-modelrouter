@@ -1773,3 +1773,55 @@ func TestCreateGroup_ProfileDropdownEscapeCloses(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// API Keys — keybinding guard clauses
+// ---------------------------------------------------------------------------
+
+func TestAPIKeys_DeleteOnActiveKeyIsNoOp(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenAPIKeys)
+	m.state.KeysList = []*auth.KeyInfo{
+		{KeyID: 1, KeyPrefix: "sk-cc-abc", UserName: "alice", IsActive: true},
+	}
+	m.state.KeysCursor = 0
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	m.Update(msg)
+
+	if m.state.ShowConfirm {
+		t.Error("ShowConfirm should not be set for active key with [d]")
+	}
+}
+
+func TestAPIKeys_RegenerateOnActiveKeyIsNoOp(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenAPIKeys)
+	m.state.KeysList = []*auth.KeyInfo{
+		{KeyID: 1, KeyPrefix: "sk-cc-abc", UserName: "alice", IsActive: true},
+	}
+	m.state.KeysCursor = 0
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	m.Update(msg)
+
+	if m.state.CreatedRawKey != "" {
+		t.Error("CreatedRawKey should not be set for active key with [r]")
+	}
+}
+
+func TestAPIKeys_DeleteOnRevokedKeyShowsConfirm(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenAPIKeys)
+	m.state.KeysList = []*auth.KeyInfo{
+		{KeyID: 2, KeyPrefix: "sk-cc-xyz", UserName: "bob", IsActive: false},
+	}
+	m.state.KeysCursor = 0
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	m.Update(msg)
+
+	if !m.state.ShowConfirm {
+		t.Error("ShowConfirm should be true when pressing [d] on revoked key")
+	}
+}
+

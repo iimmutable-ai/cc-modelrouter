@@ -481,7 +481,7 @@ ccrouter keys create [flags]
 ```
 
 **Description:**
-- Generates a key with `sk-ccrouter-` prefix
+- Generates a key with `sk-ccr-` prefix
 - SHA-256 hash stored in SQLite (raw key never persisted)
 - Returns the full key — save it immediately
 

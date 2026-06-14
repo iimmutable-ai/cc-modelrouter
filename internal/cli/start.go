@@ -397,7 +397,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Router started with instance ID: %s\n", instanceID)
-	fmt.Printf("Set ANTHROPIC_BASE_URL=http://%s to use the router\n", actualAddr)
+	fmt.Printf("Set these environment variables to use the router:\n")
+	fmt.Printf("  export ANTHROPIC_BASE_URL=http://%s\n", actualAddr)
+	if settings.Enabled {
+		fmt.Printf("  export ANTHROPIC_API_KEY=<your-sk-ccr-key>\n")
+	}
 
 	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)

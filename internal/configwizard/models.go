@@ -152,6 +152,8 @@ type WizardState struct {
 	NewKeyGroups    []*auth.GroupInfo // available groups (dropdown)
 	CreatedRawKey   string         // shown once after creation
 	KeyShowConfirm  bool           // show "save this key" warning
+	ShowKeyGroupDropdown    bool   // show group dropdown overlay
+	KeyGroupDropdownCursor  int    // cursor in group dropdown
 
 	// Multi-User screen state
 	MultiUserEnabled   bool   // multi-user toggle

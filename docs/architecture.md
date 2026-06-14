@@ -254,7 +254,7 @@ Claude Code                    cc-modelrouter                    Provider
 Client (Claude Code)                    Router Server
   │                                        │
   │ POST /v1/messages                      │
-  │ Authorization: Bearer sk-ccrouter-..   │
+  │ Authorization: Bearer sk-ccr-..   │
   │--------------------------------------->│
   │                                        │
   │  ServeHTTP                             │
@@ -386,7 +386,7 @@ Runtime profile management endpoints (switch, status) are secured with generated
 API key management with SQLite-backed storage.
 
 **Key Design:**
-- Keys have `sk-ccrouter-` prefix
+- Keys have `sk-ccr-` prefix
 - Only SHA-256 hashes stored in SQLite — raw keys returned once at creation
 - User identity propagated via Go context (`CtxKeyUser`, `CtxKeyRawToken`)
 - Per-group profile mapping: user's group determines which route profile is used

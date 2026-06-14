@@ -233,6 +233,10 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.state.ShowGroupProfileDropdown = false
 				m.state.NewGroupProfileDropdownCursor = 0
 			}
+			if m.state.CurrentScreen == ScreenCreateAPIKey {
+				m.state.ShowKeyGroupDropdown = false
+				m.state.KeyGroupDropdownCursor = 0
+			}
 		}
 		return m, nil
 	}
@@ -467,9 +471,17 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.state.NewKeyGroups) > 0 {
 				m.state.NewKeyGroup = m.state.NewKeyGroups[0].Name
 			}
+			m.state.ShowKeyGroupDropdown = false
+			m.state.KeyGroupDropdownCursor = 0
 			m.focusedField = 0
 			m.state.CurrentScreen = ScreenCreateAPIKey
 			return m, nil
+		}
+		if msg.String() == "d" || msg.String() == "D" {
+			return m.handleAPIKeysDelete()
+		}
+		if msg.String() == "r" || msg.String() == "R" {
+			return m.handleAPIKeysRegenerate()
 		}
 	case ScreenCreateAPIKey:
 		return m.handleCreateAPIKeyInput(msg)
@@ -723,6 +735,11 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 		m.state.CurrentScreen = ScreenMainMenu
 
 	case ScreenCreateAPIKey:
+		if m.state.ShowKeyGroupDropdown {
+			m.state.ShowKeyGroupDropdown = false
+			m.state.KeyGroupDropdownCursor = 0
+			return m, nil
+		}
 		m.state.NewKeyName = ""
 		m.state.NewKeyGroup = ""
 		m.state.KeyShowConfirm = false
@@ -887,10 +904,12 @@ func (m *WizardModel) handleNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ScreenAPIKeys:
 		keyCount := len(m.state.KeysList)
 		if keyCount > 0 {
+			// Navigation includes keys + create button row (index = keyCount)
+			totalItems := keyCount + 1
 			if isUp {
-				m.state.KeysCursor = (m.state.KeysCursor - 1 + keyCount) % keyCount
+				m.state.KeysCursor = (m.state.KeysCursor - 1 + totalItems) % totalItems
 			} else {
-				m.state.KeysCursor = (m.state.KeysCursor + 1) % keyCount
+				m.state.KeysCursor = (m.state.KeysCursor + 1) % totalItems
 			}
 		}
 
@@ -912,6 +931,19 @@ func (m *WizardModel) handleNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.state.NewGroupProfileDropdownCursor = (m.state.NewGroupProfileDropdownCursor - 1 + len(profileNames)) % len(profileNames)
 				} else {
 					m.state.NewGroupProfileDropdownCursor = (m.state.NewGroupProfileDropdownCursor + 1) % len(profileNames)
+				}
+			}
+			return m, nil
+		}
+
+	case ScreenCreateAPIKey:
+		if m.state.ShowKeyGroupDropdown {
+			groups := m.state.NewKeyGroups
+			if len(groups) > 0 {
+				if isUp {
+					m.state.KeyGroupDropdownCursor = (m.state.KeyGroupDropdownCursor - 1 + len(groups)) % len(groups)
+				} else {
+					m.state.KeyGroupDropdownCursor = (m.state.KeyGroupDropdownCursor + 1) % len(groups)
 				}
 			}
 			return m, nil
@@ -4438,6 +4470,15 @@ func (m *WizardModel) handleAPIKeysEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Create button row selected
+	if m.state.KeysCursor == len(m.state.KeysList) {
+		m.state.NewKeyName = ""
+		m.state.NewKeyGroup = ""
+		m.focusedField = 0
+		m.state.CurrentScreen = ScreenCreateAPIKey
+		return m, nil
+	}
+
 	// Revoke selected key
 	selected := m.state.KeysList[m.state.KeysCursor]
 	if !selected.IsActive {
@@ -4460,14 +4501,101 @@ func (m *WizardModel) handleAPIKeysEnter() (tea.Model, tea.Cmd) {
 			return false
 		}
 		m.loadKeysData()
-		return true
+		// Clamp cursor after list refresh
+		if m.state.KeysCursor >= len(m.state.KeysList) && len(m.state.KeysList) > 0 {
+			m.state.KeysCursor = len(m.state.KeysList) - 1
+		}
+		return false
 	}
 	return m, nil
 }
 
+func (m *WizardModel) handleAPIKeysDelete() (tea.Model, tea.Cmd) {
+	if len(m.state.KeysList) == 0 {
+		return m, nil
+	}
+	onCreateBtn := m.state.KeysCursor == len(m.state.KeysList)
+	if onCreateBtn {
+		return m, nil
+	}
+	selected := m.state.KeysList[m.state.KeysCursor]
+	if selected.IsActive {
+		return m, nil
+	}
+
+	m.state.ShowConfirm = true
+	m.state.ConfirmCursor = 1 // Default to No (destructive)
+	m.state.ConfirmMessage = fmt.Sprintf("Permanently delete key %s (%s)?", selected.KeyPrefix, selected.UserName)
+	m.state.ConfirmAction = func() bool {
+		db, err := openWizardDB()
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
+			return false
+		}
+		defer db.Close()
+		ks := auth.NewKeyStore(db)
+		if err := ks.DeleteKey(selected.KeyID); err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to delete: %v", err)
+			return false
+		}
+		m.loadKeysData()
+		// Clamp cursor after list refresh
+		if m.state.KeysCursor >= len(m.state.KeysList) && len(m.state.KeysList) > 0 {
+			m.state.KeysCursor = len(m.state.KeysList) - 1
+		}
+		return false
+	}
+	return m, nil
+}
+
+func (m *WizardModel) handleAPIKeysRegenerate() (tea.Model, tea.Cmd) {
+	if len(m.state.KeysList) == 0 {
+		return m, nil
+	}
+	onCreateBtn := m.state.KeysCursor == len(m.state.KeysList)
+	if onCreateBtn {
+		return m, nil
+	}
+	selected := m.state.KeysList[m.state.KeysCursor]
+	if selected.IsActive {
+		return m, nil
+	}
+
+	db, err := openWizardDB()
+	if err != nil {
+		m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
+		return m, nil
+	}
+	defer db.Close()
+	ks := auth.NewKeyStore(db)
+
+	group, err := ks.GetGroupByName(selected.GroupName)
+	if err != nil {
+		m.state.ErrorMessage = fmt.Sprintf("Failed to find group: %v", err)
+		return m, nil
+	}
+	if group == nil {
+		m.state.ErrorMessage = fmt.Sprintf("Group %q not found", selected.GroupName)
+		return m, nil
+	}
+
+	rawKey, _, err := ks.CreateKey(selected.UserName, group.ID)
+	if err != nil {
+		m.state.ErrorMessage = fmt.Sprintf("Failed to create key: %v", err)
+		return m, nil
+	}
+
+	// Remove the old revoked key — the new one replaces it
+	ks.DeleteKey(selected.KeyID)
+
+	m.state.CreatedRawKey = rawKey
+	m.state.KeyShowConfirm = true
+	m.loadKeysData()
+	return m, nil
+}
+
 func (m *WizardModel) renderAPIKeys() string {
-	title := TitleStyle.Width(m.contentWidth()).Render("API Keys")
-	backHint := HelpTextStyle.Render("[Esc] Back")
+	title := TitleStyle.Width(m.contentWidth()).Render("Users API Keys")
 
 	var lines []string
 
@@ -4495,8 +4623,15 @@ func (m *WizardModel) renderAPIKeys() string {
 		createBtn := ButtonPrimaryStyle.Render("[Create Key]")
 		lines = append(lines, m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, createBtn)))
 	} else {
+		leftHeader := fmt.Sprintf("%-12s %-14s %-14s", "PREFIX", "USER", "GROUP")
+		rightHeader := fmt.Sprintf("%6s   %-16s", "ACTIVE", "LAST USED")
+		innerW := m.contentWidth() - 2
+		gap := innerW - lipgloss.Width(leftHeader) - lipgloss.Width(rightHeader)
+		if gap < 4 {
+			gap = 4
+		}
 		header := TableHeaderStyle.Width(m.contentWidth()).Render(
-			fmt.Sprintf("%-14s %-16s %-6s %-14s", "PREFIX", "USER", "ACTIVE", "LAST USED"),
+			leftHeader + strings.Repeat(" ", gap) + rightHeader,
 		)
 		lines = append(lines, header)
 
@@ -4513,8 +4648,17 @@ func (m *WizardModel) renderAPIKeys() string {
 			if name == "" {
 				name = "(unnamed)"
 			}
-			row := fmt.Sprintf("%-14s %-16s %-6s %-14s",
-				k.KeyPrefix, name, active, lastUsed)
+			group := k.GroupName
+			if group == "" {
+				group = "(none)"
+			}
+			leftData := fmt.Sprintf("%-12s %-14s %-14s", k.KeyPrefix, name, group)
+			rightData := fmt.Sprintf("%6s   %-16s", active, lastUsed)
+			dataGap := innerW - lipgloss.Width(leftData) - lipgloss.Width(rightData)
+			if dataGap < 4 {
+				dataGap = 4
+			}
+			row := leftData + strings.Repeat(" ", dataGap) + rightData
 
 			if i == m.state.KeysCursor {
 				row = ListItemSelectedStyle.Width(m.contentWidth()).Render(row)
@@ -4527,24 +4671,40 @@ func (m *WizardModel) renderAPIKeys() string {
 		}
 
 		lines = append(lines, "")
-		if m.state.KeysCursor < len(m.state.KeysList) {
-			selected := m.state.KeysList[m.state.KeysCursor]
-			action := "Press [Enter] to revoke"
-			if !selected.IsActive {
-				action = "This key has been revoked"
-			}
-			lines = append(lines, HelpTextStyle.Render(action))
+		// Create button row — active when cursor is on it
+		var createBtn string
+		if m.state.KeysCursor == len(m.state.KeysList) {
+			createBtn = ButtonPrimaryStyle.Render("[Create Key]")
+		} else {
+			createBtn = ButtonStyle.Render("[Create Key]")
 		}
+		lines = append(lines, m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, createBtn)))
 		lines = append(lines, "")
+	}
+
+	// Context-sensitive hint bar
+	var hint string
+	onCreateBtn := len(m.state.KeysList) > 0 && m.state.KeysCursor == len(m.state.KeysList)
+	if onCreateBtn {
+		hint = "[Enter] Create   [↑/↓] Navigate   [Esc] Back"
+	} else if len(m.state.KeysList) > 0 && m.state.KeysCursor < len(m.state.KeysList) {
+		selected := m.state.KeysList[m.state.KeysCursor]
+		if selected.IsActive {
+			hint = "[Enter] Revoke   [c] Create   [↑/↓] Navigate   [Esc] Back"
+		} else {
+			hint = "[d] Delete   [r] Regenerate   [c] Create   [↑/↓] Navigate   [Esc] Back"
+		}
+	} else {
+		hint = "[Enter] Select   [Esc] Back"
 	}
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		m.fullWidth(title+"  "+backHint),
+		m.fullWidth(title),
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Navigate   [Enter] Action   [Esc] Back"),
+		HelpTextStyle.Width(m.contentWidth()).Render(hint),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
@@ -4555,10 +4715,34 @@ func (m *WizardModel) renderAPIKeys() string {
 
 func (m *WizardModel) handleCreateAPIKeyEnter() (tea.Model, tea.Cmd) {
 	switch m.focusedField {
+	case 1: // Group dropdown
+		if m.state.ShowKeyGroupDropdown {
+			if m.state.KeyGroupDropdownCursor < len(m.state.NewKeyGroups) {
+				m.state.NewKeyGroup = m.state.NewKeyGroups[m.state.KeyGroupDropdownCursor].Name
+			}
+			m.state.ShowKeyGroupDropdown = false
+			m.state.KeyGroupDropdownCursor = 0
+			return m, nil
+		}
+		m.state.ShowKeyGroupDropdown = true
+		m.state.KeyGroupDropdownCursor = 0
+		for i, g := range m.state.NewKeyGroups {
+			if g.Name == m.state.NewKeyGroup {
+				m.state.KeyGroupDropdownCursor = i
+				break
+			}
+		}
+		return m, nil
 	case 2: // Create button
 		if m.state.NewKeyName == "" {
 			m.state.ErrorMessage = "Key name is required"
 			return m, nil
+		}
+		for _, k := range m.state.KeysList {
+			if strings.EqualFold(k.UserName, m.state.NewKeyName) {
+				m.state.ErrorMessage = "A key with this user name already exists"
+				return m, nil
+			}
 		}
 		if m.state.NewKeyGroup == "" {
 			m.state.ErrorMessage = "Group is required"
@@ -4583,7 +4767,7 @@ func (m *WizardModel) handleCreateAPIKeyEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		rawKey, _, err := ks.CreateKey(m.state.NewKeyName)
+		rawKey, _, err := ks.CreateKey(m.state.NewKeyName, g.ID)
 		if err != nil {
 			m.state.ErrorMessage = fmt.Sprintf("Failed to create key: %v", err)
 			return m, nil
@@ -4611,20 +4795,14 @@ func (m *WizardModel) handleCreateAPIKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cm
 		if len(msg.String()) == 1 && len(m.state.NewKeyName) < 64 {
 			m.state.NewKeyName += msg.String()
 		}
-	case 1: // Group — cycle through available groups
-		if msg.Type == tea.KeyUp || msg.String() == "k" {
-			if len(m.state.NewKeyGroups) > 0 {
-				m.state.NewKeyGroup = m.state.NewKeyGroups[(len(m.state.NewKeyGroups)-1)%len(m.state.NewKeyGroups)].Name
-			}
-		} else if msg.Type == tea.KeyDown || msg.String() == "j" || msg.String() == " " {
-			if len(m.state.NewKeyGroups) > 0 {
-				m.state.NewKeyGroup = m.state.NewKeyGroups[0].Name
-			}
-		} else if len(msg.String()) == 1 {
-			for _, g := range m.state.NewKeyGroups {
-				if len(g.Name) > 0 && g.Name[0] == msg.String()[0] {
-					m.state.NewKeyGroup = g.Name
-					break
+	case 1: // Group dropdown
+		if m.state.ShowKeyGroupDropdown {
+			if len(msg.String()) == 1 {
+				for i, g := range m.state.NewKeyGroups {
+					if len(g.Name) > 0 && strings.EqualFold(string(g.Name[0]), msg.String()) {
+						m.state.KeyGroupDropdownCursor = i
+						return m, nil
+					}
 				}
 			}
 		}
@@ -4634,13 +4812,12 @@ func (m *WizardModel) handleCreateAPIKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cm
 
 func (m *WizardModel) renderCreateAPIKey() string {
 	title := TitleStyle.Width(m.contentWidth()).Render("Create API Key")
-	backHint := HelpTextStyle.Render("[Esc] Back")
 
 	var lines []string
 	lines = append(lines, "")
 
 	// Name field
-	nameLabel := "Name:"
+	nameLabel := "User Name:"
 	nameStyle := InputFieldStyle
 	if m.focusedField == 0 {
 		nameStyle = InputFieldFocusedStyle
@@ -4661,18 +4838,32 @@ func (m *WizardModel) renderCreateAPIKey() string {
 	lines = append(lines, groupLabel)
 
 	if len(m.state.NewKeyGroups) > 0 {
-		for _, g := range m.state.NewKeyGroups {
-			if g.Name == m.state.NewKeyGroup {
-				lines = append(lines, ListItemSelectedStyle.Width(m.inputFieldWidth()).Render("▸ "+g.Name))
-			} else {
-				lines = append(lines, ListItemStyle.Width(m.inputFieldWidth()).Render("  "+g.Name))
+		indicator := "  "
+		if m.focusedField == 1 {
+			indicator = "▾ "
+		}
+		lines = append(lines, groupStyle.Width(m.inputFieldWidth()).Render(indicator+m.state.NewKeyGroup))
+
+		if m.state.ShowKeyGroupDropdown && m.focusedField == 1 {
+			var dropdownItems []string
+			dropdownContentWidth := m.inputFieldWidth() - DropdownStyle.GetHorizontalFrameSize()
+			for i, g := range m.state.NewKeyGroups {
+				if i == m.state.KeyGroupDropdownCursor {
+					dropdownItems = append(dropdownItems, ListItemSelectedStyle.Width(dropdownContentWidth).Render(g.Name))
+				} else {
+					dropdownItems = append(dropdownItems, ListItemStyle.Width(dropdownContentWidth).Render(g.Name))
+				}
 			}
+			dropdown := DropdownStyle.Width(m.inputFieldWidth()).Render(
+				lipgloss.JoinVertical(lipgloss.Left, dropdownItems...),
+			)
+			lines = append(lines, dropdown)
 		}
 	} else {
 		lines = append(lines, groupStyle.Width(m.inputFieldWidth()).Render("No groups — run 'ccrouter groups create' first"))
 	}
 	if m.focusedField == 1 {
-		lines = append(lines, HelpTextStyle.Render("↑/↓ to select group"))
+		lines = append(lines, HelpTextStyle.Render("[Enter] Select group"))
 	}
 	lines = append(lines, "")
 
@@ -4691,11 +4882,11 @@ func (m *WizardModel) renderCreateAPIKey() string {
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		m.fullWidth(title+"  "+backHint),
+		m.fullWidth(title),
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next field   [Enter] Create   [Esc] Back"),
+		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next field   [Enter] Action   [Esc] Back"),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)

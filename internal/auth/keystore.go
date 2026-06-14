@@ -17,6 +17,7 @@ type KeyInfo struct {
 	KeyID     int64
 	KeyPrefix string
 	UserName  string
+	GroupName string
 	IsActive  bool
 	CreatedAt time.Time
 	LastUsed  *time.Time
@@ -33,11 +34,12 @@ type GroupInfo struct {
 }
 
 // UserInfo is the resolved user identity stored in request context.
-// GroupName and Profile are resolved by the caller via GetUserGroup.
+// GroupName and Profile are resolved by the caller via GetUserGroup or fallback from api_keys.group_id.
 type UserInfo struct {
 	KeyID     int64
 	KeyPrefix string
 	UserName  string
+	GroupID   int64
 	GroupName string
 	Profile   string
 }
@@ -84,14 +86,14 @@ func hashKey(raw string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// GenerateKey creates a new API key with the prefix "sk-ccrouter-".
+// GenerateKey creates a new API key with the prefix "sk-ccr-".
 // Returns the raw key (only returned at creation time) and its hash.
 func GenerateKey() (raw string, hash string, prefix string, err error) {
 	var b [32]byte
 	if _, err = rand.Read(b[:]); err != nil {
 		return "", "", "", fmt.Errorf("failed to generate key: %w", err)
 	}
-	raw = "sk-ccrouter-" + hex.EncodeToString(b[:])
+	raw = "sk-ccr-" + hex.EncodeToString(b[:])
 	hash = hashKey(raw)
 	prefix = raw[:KeyPrefixLen]
 	return raw, hash, prefix, nil
@@ -314,6 +316,24 @@ func (ks *KeyStore) GetUserGroup(userName string) (*GroupInfo, error) {
 	return &g, nil
 }
 
+// GetGroupByID returns group info by its ID.
+func (ks *KeyStore) GetGroupByID(groupID int64) (*GroupInfo, error) {
+	var g GroupInfo
+	err := ks.db.QueryRow(`
+		SELECT id, name, profile, priority_weight, max_concurrency, created_at
+		FROM user_groups
+		WHERE id = ?`,
+		groupID,
+	).Scan(&g.ID, &g.Name, &g.Profile, &g.PriorityWeight, &g.MaxConcurrency, &g.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get group by ID: %w", err)
+	}
+	return &g, nil
+}
+
 // GetUserProfile returns the profile for a user by looking up their group.
 func (ks *KeyStore) GetUserProfile(userName string) (string, error) {
 	g, err := ks.GetUserGroup(userName)
@@ -340,7 +360,7 @@ func (ks *KeyStore) GetGroupMemberCount(groupID int64) (int, error) {
 
 // CreateKey creates a new API key for a user. Returns the full raw key (only shown once) and the key ID.
 // The raw key is encrypted and stored alongside the hash for later retrieval.
-func (ks *KeyStore) CreateKey(userName string) (rawKey string, keyID int64, err error) {
+func (ks *KeyStore) CreateKey(userName string, groupID int64) (rawKey string, keyID int64, err error) {
 	rawKey, keyHash, prefix, err := GenerateKey()
 	if err != nil {
 		return "", 0, err
@@ -352,8 +372,8 @@ func (ks *KeyStore) CreateKey(userName string) (rawKey string, keyID int64, err 
 	}
 
 	result, err := ks.db.Exec(
-		"INSERT INTO api_keys (key_hash, key_prefix, name, user_name, group_id, key_encrypted) VALUES (?, ?, ?, ?, 0, ?)",
-		keyHash, prefix, userName, userName, encrypted,
+		"INSERT INTO api_keys (key_hash, key_prefix, name, user_name, group_id, key_encrypted) VALUES (?, ?, ?, ?, ?, ?)",
+		keyHash, prefix, userName, userName, groupID, encrypted,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -426,11 +446,11 @@ func (ks *KeyStore) ValidateKey(rawKey string) (*UserInfo, error) {
 	// Cache miss or expired — query SQLite (no JOIN, just key fields)
 	var info UserInfo
 	err := ks.db.QueryRow(`
-		SELECT id, key_prefix, user_name
+		SELECT id, key_prefix, user_name, group_id
 		FROM api_keys
 		WHERE key_hash = ? AND is_active = 1`,
 		keyHash,
-	).Scan(&info.KeyID, &info.KeyPrefix, &info.UserName)
+	).Scan(&info.KeyID, &info.KeyPrefix, &info.UserName, &info.GroupID)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -444,6 +464,13 @@ func (ks *KeyStore) ValidateKey(rawKey string) (*UserInfo, error) {
 	if err == nil && group != nil {
 		info.GroupName = group.Name
 		info.Profile = group.Profile
+	} else if info.GroupID > 0 {
+		// Fallback: resolve group directly from api_keys.group_id
+		g, err := ks.GetGroupByID(info.GroupID)
+		if err == nil && g != nil {
+			info.GroupName = g.Name
+			info.Profile = g.Profile
+		}
 	}
 
 	// Update cache
@@ -468,8 +495,10 @@ func (ks *KeyStore) updateLastUsed(keyID int64) {
 // ListKeys returns all API keys.
 func (ks *KeyStore) ListKeys() ([]*KeyInfo, error) {
 	rows, err := ks.db.Query(`
-		SELECT id, key_prefix, user_name, is_active, created_at, last_used
-		FROM api_keys ORDER BY created_at DESC`)
+		SELECT ak.id, ak.key_prefix, ak.user_name, ug.name, ak.is_active, ak.created_at, ak.last_used
+		FROM api_keys ak
+		LEFT JOIN user_groups ug ON ak.group_id = ug.id
+		ORDER BY ak.created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list keys: %w", err)
 	}
@@ -478,7 +507,7 @@ func (ks *KeyStore) ListKeys() ([]*KeyInfo, error) {
 	var keys []*KeyInfo
 	for rows.Next() {
 		var k KeyInfo
-		if err := rows.Scan(&k.KeyID, &k.KeyPrefix, &k.UserName, &k.IsActive, &k.CreatedAt, &k.LastUsed); err != nil {
+		if err := rows.Scan(&k.KeyID, &k.KeyPrefix, &k.UserName, &k.GroupName, &k.IsActive, &k.CreatedAt, &k.LastUsed); err != nil {
 			return nil, fmt.Errorf("failed to scan key: %w", err)
 		}
 		keys = append(keys, &k)
@@ -495,6 +524,21 @@ func (ks *KeyStore) RevokeKey(id int64) error {
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("key not found: %d", id)
+	}
+	ks.invalidateCache()
+	return nil
+}
+
+// DeleteKey permanently removes a revoked (inactive) API key by ID.
+// Returns an error if the key is still active or not found.
+func (ks *KeyStore) DeleteKey(id int64) error {
+	result, err := ks.db.Exec("DELETE FROM api_keys WHERE id = ? AND is_active = 0", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete key: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("active key cannot be deleted or key not found: %d", id)
 	}
 	ks.invalidateCache()
 	return nil

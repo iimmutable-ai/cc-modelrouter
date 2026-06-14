@@ -93,8 +93,8 @@ func TestGenerateKey(t *testing.T) {
 		t.Fatalf("GenerateKey failed: %v", err)
 	}
 
-	if !strings.HasPrefix(raw, "sk-ccrouter-") {
-		t.Errorf("expected key to start with 'sk-ccrouter-', got %s", raw[:15])
+	if !strings.HasPrefix(raw, "sk-ccr-") {
+		t.Errorf("expected key to start with 'sk-ccr-', got %s", raw[:15])
 	}
 
 	if len(prefix) != KeyPrefixLen {
@@ -124,7 +124,7 @@ func TestGenerateKey(t *testing.T) {
 }
 
 func TestHashKey(t *testing.T) {
-	key := "sk-ccrouter-test123"
+	key := "sk-ccr-test123"
 	hash := hashKey(key)
 
 	hash2 := hashKey(key)
@@ -132,7 +132,7 @@ func TestHashKey(t *testing.T) {
 		t.Error("hash should be deterministic")
 	}
 
-	key2 := "sk-ccrouter-test456"
+	key2 := "sk-ccr-test456"
 	hash3 := hashKey(key2)
 	if hash == hash3 {
 		t.Error("different keys should produce different hashes")
@@ -561,15 +561,18 @@ func TestCreateKey(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	rawKey, keyID, err := ks.CreateKey("alice")
+	groupID, _ := ks.CreateGroup("default", "default", 1.0, 0)
+	ks.AddGroupMember(groupID, "alice")
+
+	rawKey, keyID, err := ks.CreateKey("alice", groupID)
 	if err != nil {
 		t.Fatalf("CreateKey failed: %v", err)
 	}
 	if keyID <= 0 {
 		t.Errorf("expected positive key ID, got %d", keyID)
 	}
-	if !strings.HasPrefix(rawKey, "sk-ccrouter-") {
-		t.Errorf("expected key prefix 'sk-ccrouter-', got %s", rawKey[:15])
+	if !strings.HasPrefix(rawKey, "sk-ccr-") {
+		t.Errorf("expected key prefix 'sk-ccr-', got %s", rawKey[:15])
 	}
 
 	info, err := ks.ValidateKey(rawKey)
@@ -582,12 +585,12 @@ func TestCreateKey(t *testing.T) {
 	if info.UserName != "alice" {
 		t.Errorf("expected UserName 'alice', got %s", info.UserName)
 	}
-	// No group membership yet, so GroupName and Profile should be empty
-	if info.GroupName != "" {
-		t.Errorf("expected empty GroupName, got %s", info.GroupName)
+	// Key is now associated with the group
+	if info.GroupName != "default" {
+		t.Errorf("expected GroupName 'default', got %s", info.GroupName)
 	}
-	if info.Profile != "" {
-		t.Errorf("expected empty Profile, got %s", info.Profile)
+	if info.Profile != "default" {
+		t.Errorf("expected Profile 'default', got %s", info.Profile)
 	}
 }
 
@@ -597,7 +600,7 @@ func TestValidateKey_WithGroup(t *testing.T) {
 
 	groupID, _ := ks.CreateGroup("developers", "default", 1.0, 0)
 	ks.AddGroupMember(groupID, "alice")
-	rawKey, _, _ := ks.CreateKey("alice")
+	rawKey, _, _ := ks.CreateKey("alice", groupID)
 
 	info, err := ks.ValidateKey(rawKey)
 	if err != nil {
@@ -621,9 +624,10 @@ func TestValidateKey_Invalid(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	_, _, _ = ks.CreateKey("alice")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	_, _, _ = ks.CreateKey("alice", gid)
 
-	info, err := ks.ValidateKey("sk-ccrouter-wrongkey123")
+	info, err := ks.ValidateKey("sk-ccr-wrongkey123")
 	if err != nil {
 		t.Fatalf("ValidateKey failed: %v", err)
 	}
@@ -636,7 +640,8 @@ func TestValidateKey_Cache(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	rawKey, _, _ := ks.CreateKey("alice")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	rawKey, _, _ := ks.CreateKey("alice", gid)
 
 	info1, err := ks.ValidateKey(rawKey)
 	if err != nil {
@@ -668,9 +673,10 @@ func TestListKeys(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	_, _, _ = ks.CreateKey("alice")
-	_, _, _ = ks.CreateKey("bob")
-	_, _, _ = ks.CreateKey("charlie")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	_, _, _ = ks.CreateKey("alice", gid)
+	_, _, _ = ks.CreateKey("bob", gid)
+	_, _, _ = ks.CreateKey("charlie", gid)
 
 	keys, err := ks.ListKeys()
 	if err != nil {
@@ -687,6 +693,9 @@ func TestListKeys(t *testing.T) {
 		if k.UserName == "" {
 			t.Error("UserName should not be empty")
 		}
+		if k.GroupName == "" {
+			t.Error("GroupName should not be empty for keys with valid group")
+		}
 	}
 }
 
@@ -694,7 +703,8 @@ func TestRevokeKey(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	rawKey, keyID, _ := ks.CreateKey("alice")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	rawKey, keyID, _ := ks.CreateKey("alice", gid)
 
 	err := ks.RevokeKey(keyID)
 	if err != nil {
@@ -732,7 +742,8 @@ func TestGetRawKey(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	rawKey, keyID, _ := ks.CreateKey("alice")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	rawKey, keyID, _ := ks.CreateKey("alice", gid)
 
 	retrieved, err := ks.GetRawKey(keyID)
 	if err != nil {
@@ -760,7 +771,8 @@ func TestGetRawKeyByUserName(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	rawKey, keyID, _ := ks.CreateKey("alice")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	rawKey, keyID, _ := ks.CreateKey("alice", gid)
 
 	retrieved, id, err := ks.GetRawKeyByUserName("alice")
 	if err != nil {
@@ -791,7 +803,8 @@ func TestGetRawKeyByUserName_RevokedKey(t *testing.T) {
 	ks, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	_, keyID, _ := ks.CreateKey("alice")
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	_, keyID, _ := ks.CreateKey("alice", gid)
 	ks.RevokeKey(keyID)
 
 	_, _, err := ks.GetRawKeyByUserName("alice")
@@ -809,7 +822,7 @@ func TestEncryptDecrypt(t *testing.T) {
 		data string
 	}{
 		{"short", "hello"},
-		{"api key", "sk-ccrouter-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"},
+		{"api key", "sk-ccr-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"},
 		{"empty", ""},
 		{"unicode", "hello 世界"},
 	}
@@ -842,6 +855,70 @@ func TestDecrypt_InvalidInput(t *testing.T) {
 	_, err = Decrypt("dGVzdA==") // valid base64 but too short for nonce
 	if err == nil {
 		t.Error("expected error for too-short ciphertext")
+	}
+}
+
+func TestDeleteKey(t *testing.T) {
+	ks, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	_, keyID, _ := ks.CreateKey("alice", gid)
+	ks.RevokeKey(keyID)
+
+	if err := ks.DeleteKey(keyID); err != nil {
+		t.Fatalf("DeleteKey failed: %v", err)
+	}
+
+	keys, err := ks.ListKeys()
+	if err != nil {
+		t.Fatalf("ListKeys failed: %v", err)
+	}
+	for _, k := range keys {
+		if k.KeyID == keyID {
+			t.Error("deleted key should not appear in list")
+		}
+	}
+}
+
+func TestDeleteKey_ActiveKey(t *testing.T) {
+	ks, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	gid, _ := ks.CreateGroup("test", "default", 1.0, 0)
+	_, keyID, _ := ks.CreateKey("alice", gid)
+
+	err := ks.DeleteKey(keyID)
+	if err == nil {
+		t.Fatal("expected error when deleting active key")
+	}
+	if !strings.Contains(err.Error(), "active key cannot be deleted") {
+		t.Errorf("expected 'active key cannot be deleted' in error, got: %v", err)
+	}
+
+	// Verify key still exists and is active
+	keys, _ := ks.ListKeys()
+	found := false
+	for _, k := range keys {
+		if k.KeyID == keyID && k.IsActive {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("active key should still exist after failed delete")
+	}
+}
+
+func TestDeleteKey_NotFound(t *testing.T) {
+	ks, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := ks.DeleteKey(99999)
+	if err == nil {
+		t.Fatal("expected error for non-existent key ID")
+	}
+	if !strings.Contains(err.Error(), "active key cannot be deleted") {
+		t.Errorf("expected 'active key cannot be deleted' in error, got: %v", err)
 	}
 }
 

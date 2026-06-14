@@ -550,7 +550,7 @@ When `multiUser.enabled` is `false` or absent, the server operates in single-use
 
 | Concept | Description |
 |---------|-------------|
-| **API Keys** | `sk-ccrouter-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
+| **API Keys** | `sk-ccr-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
 | **User Groups** | Map keys to routing profiles with QoS settings |
 | **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
 | **Idle Borrowing** | Groups can borrow unused capacity from other groups |
@@ -587,7 +587,7 @@ ccrouter groups delete <id>
 4. Configure Claude Code to use the router with the API key:
    ```bash
    export ANTHROPIC_BASE_URL=http://localhost:8081
-   export ANTHROPIC_API_KEY=sk-ccrouter-...
+   export ANTHROPIC_API_KEY=sk-ccr-...
    claude
    ```
 

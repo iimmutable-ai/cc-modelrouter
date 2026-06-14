@@ -30,19 +30,21 @@ func NewKeysCommand() *cobra.Command {
 
 func NewKeysCreateCommand() *cobra.Command {
 	var name string
+	var group string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new API key",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runKeysCreate(name)
+			return runKeysCreate(name, group)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "User name (description)")
+	cmd.Flags().StringVar(&group, "group", "", "Group name (defaults to first group)")
 	cmd.MarkFlagRequired("name")
 	return cmd
 }
 
-func runKeysCreate(name string) error {
+func runKeysCreate(name, groupName string) error {
 	db, err := openUsageDB()
 	if err != nil {
 		return err
@@ -51,7 +53,28 @@ func runKeysCreate(name string) error {
 
 	ks := auth.NewKeyStore(db)
 
-	rawKey, keyID, err := ks.CreateKey(name)
+	var groupID int64
+	if groupName != "" {
+		g, err := ks.GetGroupByName(groupName)
+		if err != nil {
+			return fmt.Errorf("failed to look up group: %w", err)
+		}
+		if g == nil {
+			return fmt.Errorf("group not found: %s", groupName)
+		}
+		groupID = g.ID
+	} else {
+		groups, err := ks.ListGroups()
+		if err != nil {
+			return fmt.Errorf("failed to list groups: %w", err)
+		}
+		if len(groups) == 0 {
+			return fmt.Errorf("no groups exist; create one first with: ccrouter groups create")
+		}
+		groupID = groups[0].ID
+	}
+
+	rawKey, keyID, err := ks.CreateKey(name, groupID)
 	if err != nil {
 		return fmt.Errorf("failed to create key: %w", err)
 	}

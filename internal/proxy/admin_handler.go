@@ -276,6 +276,7 @@ func (a *AdminHandler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		UserName string `json:"userName"`
+		Group    string `json:"group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "Invalid request body")
@@ -285,7 +286,33 @@ func (a *AdminHandler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, "userName is required")
 		return
 	}
-	rawKey, keyID, err := ks.CreateKey(req.UserName)
+
+	var groupID int64
+	if req.Group != "" {
+		g, err := ks.GetGroupByName(req.Group)
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if g == nil {
+			writeAdminError(w, http.StatusBadRequest, fmt.Sprintf("Group not found: %s", req.Group))
+			return
+		}
+		groupID = g.ID
+	} else {
+		groups, err := ks.ListGroups()
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(groups) == 0 {
+			writeAdminError(w, http.StatusBadRequest, "No groups exist; create one first")
+			return
+		}
+		groupID = groups[0].ID
+	}
+
+	rawKey, keyID, err := ks.CreateKey(req.UserName, groupID)
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, err.Error())
 		return

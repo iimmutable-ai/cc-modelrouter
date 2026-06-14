@@ -34,7 +34,7 @@ The output uses Claude Code's env format with attribution disabled.
 
 Examples:
   ccrouter gen settings --user alice
-  ccrouter gen settings --key sk-ccrouter-abc123
+  ccrouter gen settings --key sk-ccr-abc123
   ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -79,7 +79,7 @@ func runGenSettings(url, user, key, output string) error {
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 	}
 	if apiKey != "" {
-		env["ANTHROPIC_API_KEY"] = apiKey
+		env["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	}
 
 	settings := map[string]interface{}{
