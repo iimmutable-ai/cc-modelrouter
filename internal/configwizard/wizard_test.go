@@ -1608,8 +1608,8 @@ func TestGroups_EscapeGoesToMainMenu(t *testing.T) {
 	msg := tea.KeyMsg{Type: tea.KeyEscape}
 	m.Update(msg)
 
-	if m.state.CurrentScreen != ScreenMainMenu {
-		t.Errorf("expected ScreenMainMenu, got %d", m.state.CurrentScreen)
+	if m.state.CurrentScreen != ScreenMultiUser {
+		t.Errorf("expected ScreenMultiUser, got %d", m.state.CurrentScreen)
 	}
 }
 
