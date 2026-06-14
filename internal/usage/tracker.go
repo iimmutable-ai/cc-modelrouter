@@ -66,7 +66,7 @@ func (t *Tracker) Record(instanceID, route, model, profile, provider string, tok
 }
 
 // RecordWithUser adds a usage record with multi-user context via a buffered channel.
-func (t *Tracker) RecordWithUser(instanceID, route, model, profile, provider string, tokens, fallbacks int, keyPrefix, groupName string) {
+func (t *Tracker) RecordWithUser(instanceID, route, model, profile, provider string, tokens, fallbacks int, keyPrefix, groupName, userName string) {
 	t.recordCh <- &Record{
 		InstanceID:   instanceID,
 		Profile:      profile,
@@ -78,6 +78,7 @@ func (t *Tracker) RecordWithUser(instanceID, route, model, profile, provider str
 		Timestamp:    time.Now(),
 		APIKeyPrefix: keyPrefix,
 		GroupName:    groupName,
+		UserName:     userName,
 	}
 }
 

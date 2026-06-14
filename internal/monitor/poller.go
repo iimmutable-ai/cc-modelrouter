@@ -111,6 +111,8 @@ func (sp *StatsPoller) fetchUsageStats(dateRange DateRange, instanceID string) (
 			Summary:   usage.Summary{},
 			ByRoute:   make(map[string]*usage.RouteStats),
 			ByModel:   make(map[string]*usage.ModelStats),
+			ByUser:    make(map[string]*usage.UserStats),
+			ByGroup:   make(map[string]*usage.GroupStats),
 			Timestamp: time.Now(),
 		}, fmt.Errorf("database unavailable: %w", err)
 	}
@@ -122,11 +124,23 @@ func (sp *StatsPoller) fetchUsageStats(dateRange DateRange, instanceID string) (
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
 
+	// Detect multi-user mode: any record with non-empty UserName or GroupName
+	isMultiUser := false
+	for _, r := range records {
+		if r.UserName != "" || r.GroupName != "" {
+			isMultiUser = true
+			break
+		}
+	}
+
 	stats := &UsageStats{
-		Summary:   usage.AggregateSummary(records),
-		ByRoute:   usage.AggregateByRoute(records),
-		ByModel:   usage.AggregateByModel(records),
-		Timestamp: time.Now(),
+		Summary:     usage.AggregateSummary(records),
+		ByRoute:     usage.AggregateByRoute(records),
+		ByModel:     usage.AggregateByModel(records),
+		ByUser:      usage.AggregateByUser(records),
+		ByGroup:     usage.AggregateByGroup(records),
+		IsMultiUser: isMultiUser,
+		Timestamp:   time.Now(),
 	}
 
 	return stats, nil

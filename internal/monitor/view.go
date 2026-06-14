@@ -130,11 +130,14 @@ func (m *MonitorModel) renderHeader() string {
 
 	content := tabBar
 	if summary != "" {
-		content = lipgloss.JoinVertical(
-			lipgloss.Left,
-			tabBar,
-			MutedStyle.Padding(0, 2).Render(summary),
-		)
+		lines := []string{tabBar, MutedStyle.Padding(0, 2).Render(summary)}
+		if m.IsMultiUser && m.Stats != nil {
+			userGroupLine := fmt.Sprintf("Users: %d  Groups: %d",
+				m.Stats.Summary.UniqueUsers,
+				m.Stats.Summary.UniqueGroups)
+			lines = append(lines, MutedStyle.Padding(0, 2).Render(userGroupLine))
+		}
+		content = lipgloss.JoinVertical(lipgloss.Left, lines...)
 	}
 
 	return headerStyle.Render(content)
@@ -146,20 +149,25 @@ func (m *MonitorModel) renderContent() string {
 	leftWidth := m.LeftPanelWidth
 	rightWidth := m.RightPanelWidth
 
-	// Left panel: stats tables in separate bordered boxes
-	routeTable := m.renderRouteTable(leftWidth - 2)
-	modelTable := m.renderModelTable(leftWidth - 2)
-
 	// Right panel: instance list
 	rightPanel := m.renderInstanceList(rightWidth - 2)
 
-	// Use lipgloss for proper border handling with dynamic widths
+	var leftBorder string
 	leftBoxStyle := DynamicBoxStyle.Width(leftWidth)
-	rightBoxStyle := DynamicBoxStyle.Width(rightWidth)
 
-	routeBox := leftBoxStyle.Render(routeTable)
-	modelBox := leftBoxStyle.Render(modelTable)
-	leftBorder := routeBox + "\n" + modelBox
+	if m.IsMultiUser {
+		// Multi-user mode: tabbed table + model table
+		tabbedTable := m.renderTabbedTable(leftWidth - 2)
+		modelTable := m.renderModelTable(leftWidth - 2)
+		leftBorder = leftBoxStyle.Render(tabbedTable) + "\n" + leftBoxStyle.Render(modelTable)
+	} else {
+		// Single-user mode: route + model tables (unchanged)
+		routeTable := m.renderRouteTable(leftWidth - 2)
+		modelTable := m.renderModelTable(leftWidth - 2)
+		leftBorder = leftBoxStyle.Render(routeTable) + "\n" + leftBoxStyle.Render(modelTable)
+	}
+
+	rightBoxStyle := DynamicBoxStyle.Width(rightWidth)
 	rightBorder := rightBoxStyle.Render(rightPanel)
 
 	// Use lipgloss JoinHorizontal for proper layout
@@ -277,7 +285,204 @@ func (m *MonitorModel) renderRouteTable(width int) string {
 	return strings.Join(rows, "\n")
 }
 
-// renderModelTable renders the BY MODEL section with profile grouping
+// renderTabbedTable renders the tab bar and active content table
+func (m *MonitorModel) renderTabbedTable(width int) string {
+	if width < 18 {
+		width = 18
+	}
+
+	// Tab bar
+	tabDefs := []struct {
+		key  string
+		name string
+		tab  ContentTab
+	}{
+		{"g", "GROUPS", ContentTabGroups},
+		{"u", "USERS", ContentTabUsers},
+		{"o", "ROUTES", ContentTabRoutes},
+	}
+
+	var tabStrings []string
+	for _, td := range tabDefs {
+		style := InactiveTabStyle
+		if m.SelectedContentTab == td.tab {
+			style = ActiveTabStyle
+		}
+		tabStrings = append(tabStrings, style.Render(td.name))
+	}
+	tabBar := strings.Join(tabStrings, " ")
+
+	var tableRows string
+	switch m.SelectedContentTab {
+	case ContentTabGroups:
+		tableRows = m.renderGroupTable(width)
+	case ContentTabUsers:
+		tableRows = m.renderUserTable(width)
+	default:
+		tableRows = m.renderRouteTable(width)
+	}
+
+	sep := strings.Repeat("─", width)
+	return tabBar + "\n" + sep + "\n" + tableRows
+}
+
+// renderGroupTable renders the BY GROUP table sorted by tokens desc
+func (m *MonitorModel) renderGroupTable(width int) string {
+	if width < 18 {
+		width = 18
+	}
+
+	reqColWidth := int(float64(width) * requestsColRatio)
+	if reqColWidth < 8 {
+		reqColWidth = 8
+	}
+	tokenColWidth := int(float64(width) * tokensColRatio)
+	if tokenColWidth < 8 {
+		tokenColWidth = 8
+	}
+	fallbackColWidth := int(float64(width) * fbacksColRatio)
+	if fallbackColWidth < 6 {
+		fallbackColWidth = 6
+	}
+	groupColWidth := width - reqColWidth - tokenColWidth - fallbackColWidth
+	if groupColWidth < 10 {
+		totalFixed := 10 + 6 + 8 + 8
+		if width > totalFixed {
+			extra := width - totalFixed
+			groupColWidth = 10 + int(float64(extra)*0.4)
+			fallbackColWidth = 6 + int(float64(extra)*0.15)
+			reqColWidth = 8 + int(float64(extra)*0.225)
+			tokenColWidth = 8 + int(float64(extra)*0.225)
+		} else {
+			groupColWidth = 10
+		}
+	}
+
+	if m.Stats == nil || len(m.Stats.ByGroup) == 0 {
+		return MutedStyle.Render(" No group data for this period ")
+	}
+
+	var rows []string
+
+	headerRow := TableHeaderCellStyle.Width(groupColWidth).Align(lipgloss.Left).Render(" Group ") +
+		TableHeaderCellStyle.Width(reqColWidth).Align(lipgloss.Right).Render("Requests") +
+		TableHeaderCellStyle.Width(fallbackColWidth).Align(lipgloss.Right).Render("Fbacks") +
+		TableHeaderCellStyle.Width(tokenColWidth).Align(lipgloss.Right).Render("Tokens")
+	rows = append(rows, headerRow)
+
+	sep := strings.Repeat("─", width)
+	rows = append(rows, sep)
+
+	// Sort by tokens descending
+	groups := make([]*usage.GroupStats, 0, len(m.Stats.ByGroup))
+	for _, stats := range m.Stats.ByGroup {
+		groups = append(groups, stats)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Tokens > groups[j].Tokens
+	})
+
+	for i, group := range groups {
+		cellStyle := TableCellStyle
+		if i%2 == 1 {
+			cellStyle = TableCellAltStyle
+		}
+
+		// Show user count inline: "ddsi (2)"
+		displayGroup := group.GroupName
+		if group.Users > 0 {
+			displayGroup = fmt.Sprintf("%s (%d)", group.GroupName, group.Users)
+		}
+
+		groupCell := cellStyle.Width(groupColWidth).Render(" " + truncate(displayGroup, groupColWidth-1))
+		reqCell := m.flashStyle("group:"+group.GroupName+":requests", cellStyle).Width(reqColWidth).Align(lipgloss.Right).Render(formatNumber(group.Requests))
+		fbCell := m.flashStyle("group:"+group.GroupName+":fallbacks", cellStyle).Width(fallbackColWidth).Align(lipgloss.Right).Render(fmt.Sprintf("%d", group.Fallbacks))
+		tokenCell := m.flashStyle("group:"+group.GroupName+":tokens", cellStyle).Width(tokenColWidth).Align(lipgloss.Right).Render(formatTokens(group.Tokens))
+
+		rows = append(rows, groupCell+reqCell+fbCell+tokenCell)
+	}
+
+	return strings.Join(rows, "\n")
+}
+
+// renderUserTable renders the BY USER table sorted by tokens desc
+func (m *MonitorModel) renderUserTable(width int) string {
+	if width < 18 {
+		width = 18
+	}
+
+	reqColWidth := int(float64(width) * requestsColRatio)
+	if reqColWidth < 8 {
+		reqColWidth = 8
+	}
+	tokenColWidth := int(float64(width) * tokensColRatio)
+	if tokenColWidth < 8 {
+		tokenColWidth = 8
+	}
+
+	// User table: Group (15%) | User (40%) | Requests (22.5%) | Tokens (22.5%)
+	groupColWidth := int(float64(width) * 0.15)
+	if groupColWidth < 6 {
+		groupColWidth = 6
+	}
+	userColWidth := int(float64(width) * 0.40)
+	if userColWidth < 8 {
+		userColWidth = 8
+	}
+
+	// Adjust if overflow
+	totalFixed := groupColWidth + userColWidth + reqColWidth + tokenColWidth
+	if totalFixed > width {
+		scale := float64(width) / float64(totalFixed)
+		groupColWidth = int(float64(groupColWidth) * scale)
+		userColWidth = int(float64(userColWidth) * scale)
+		reqColWidth = int(float64(reqColWidth) * scale)
+		tokenColWidth = width - groupColWidth - userColWidth - reqColWidth
+		if tokenColWidth < 6 {
+			tokenColWidth = 6
+		}
+	}
+
+	if m.Stats == nil || len(m.Stats.ByUser) == 0 {
+		return MutedStyle.Render(" No user data for this period ")
+	}
+
+	var rows []string
+
+	headerRow := TableHeaderCellStyle.Width(groupColWidth).Align(lipgloss.Left).Render(" Group ") +
+		TableHeaderCellStyle.Width(userColWidth).Align(lipgloss.Left).Render(" User ") +
+		TableHeaderCellStyle.Width(reqColWidth).Align(lipgloss.Right).Render("Requests") +
+		TableHeaderCellStyle.Width(tokenColWidth).Align(lipgloss.Right).Render("Tokens")
+	rows = append(rows, headerRow)
+
+	sep := strings.Repeat("─", width)
+	rows = append(rows, sep)
+
+	// Sort by tokens descending
+	users := make([]*usage.UserStats, 0, len(m.Stats.ByUser))
+	for _, stats := range m.Stats.ByUser {
+		users = append(users, stats)
+	}
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].Tokens > users[j].Tokens
+	})
+
+	for i, user := range users {
+		cellStyle := TableCellStyle
+		if i%2 == 1 {
+			cellStyle = TableCellAltStyle
+		}
+
+		groupCell := cellStyle.Width(groupColWidth).Render(" " + truncate(user.GroupName, groupColWidth-1))
+		userCell := cellStyle.Width(userColWidth).Render(" " + truncate(user.UserName, userColWidth-1))
+		reqCell := m.flashStyle("user:"+user.UserName+":requests", cellStyle).Width(reqColWidth).Align(lipgloss.Right).Render(formatNumber(user.Requests))
+		tokenCell := m.flashStyle("user:"+user.UserName+":tokens", cellStyle).Width(tokenColWidth).Align(lipgloss.Right).Render(formatTokens(user.Tokens))
+
+		rows = append(rows, groupCell+userCell+reqCell+tokenCell)
+	}
+
+	return strings.Join(rows, "\n")
+}
 func (m *MonitorModel) renderModelTable(width int) string {
 	// Defensive: ensure minimum width
 	if width < 17 {
@@ -537,6 +742,9 @@ func (m *MonitorModel) renderStatusBar() string {
 		shortcuts += " | space:pause | 1-7:filters"
 	}
 	shortcuts += " | ←→:date | ↑↓:instance | r:refresh"
+	if m.IsMultiUser {
+		shortcuts += " | g:groups | u:users | o:routes"
+	}
 
 	// Calculate padding using visual width
 	shortcutsWidth := runewidth.StringWidth(shortcuts)

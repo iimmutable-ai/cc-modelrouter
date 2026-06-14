@@ -243,3 +243,177 @@ func TestAggregateByRoute_EmptyProfileDefaults(t *testing.T) {
 		t.Errorf("tokens = %d, want 300", stats.Tokens)
 	}
 }
+
+func TestAggregateSummary_WithMultiUserData(t *testing.T) {
+	records := []*Record{
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 100, Fallbacks: 0, GroupName: "dev", UserName: "alice"},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 200, Fallbacks: 1, GroupName: "dev", UserName: "bob"},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/default", Model: "m1", Tokens: 50, Fallbacks: 0, GroupName: "ops", UserName: "charlie"},
+	}
+
+	summary := AggregateSummary(records)
+
+	if summary.TotalRequests != 3 {
+		t.Errorf("requests = %d, want 3", summary.TotalRequests)
+	}
+	if summary.TotalTokens != 350 {
+		t.Errorf("tokens = %d, want 350", summary.TotalTokens)
+	}
+	if summary.TotalFallbacks != 1 {
+		t.Errorf("fallbacks = %d, want 1", summary.TotalFallbacks)
+	}
+	if summary.UniqueUsers != 3 {
+		t.Errorf("uniqueUsers = %d, want 3", summary.UniqueUsers)
+	}
+	if summary.UniqueGroups != 2 {
+		t.Errorf("uniqueGroups = %d, want 2", summary.UniqueGroups)
+	}
+}
+
+func TestAggregateSummary_SingleUserData(t *testing.T) {
+	records := []*Record{
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 100, Fallbacks: 0},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 200, Fallbacks: 0},
+	}
+
+	summary := AggregateSummary(records)
+
+	if summary.UniqueUsers != 0 {
+		t.Errorf("uniqueUsers = %d, want 0", summary.UniqueUsers)
+	}
+	if summary.UniqueGroups != 0 {
+		t.Errorf("uniqueGroups = %d, want 0", summary.UniqueGroups)
+	}
+}
+
+func TestAggregateByUser_Basic(t *testing.T) {
+	records := []*Record{
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 100, Fallbacks: 0, GroupName: "dev", UserName: "alice"},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 200, Fallbacks: 1, GroupName: "dev", UserName: "alice"},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/default", Model: "m1", Tokens: 50, Fallbacks: 0, GroupName: "ops", UserName: "bob"},
+	}
+
+	byUser := AggregateByUser(records)
+
+	if len(byUser) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(byUser))
+	}
+
+	alice := byUser["alice"]
+	if alice == nil {
+		t.Fatal("expected alice key")
+	}
+	if alice.Requests != 2 {
+		t.Errorf("alice requests = %d, want 2", alice.Requests)
+	}
+	if alice.Tokens != 300 {
+		t.Errorf("alice tokens = %d, want 300", alice.Tokens)
+	}
+	if alice.Fallbacks != 1 {
+		t.Errorf("alice fallbacks = %d, want 1", alice.Fallbacks)
+	}
+	if alice.GroupName != "dev" {
+		t.Errorf("alice group = %s, want dev", alice.GroupName)
+	}
+
+	bob := byUser["bob"]
+	if bob == nil {
+		t.Fatal("expected bob key")
+	}
+	if bob.Requests != 1 {
+		t.Errorf("bob requests = %d, want 1", bob.Requests)
+	}
+	if bob.GroupName != "ops" {
+		t.Errorf("bob group = %s, want ops", bob.GroupName)
+	}
+}
+
+func TestAggregateByUser_Anonymous(t *testing.T) {
+	records := []*Record{
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 100, Fallbacks: 0, UserName: ""},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 50, Fallbacks: 0, UserName: ""},
+	}
+
+	byUser := AggregateByUser(records)
+
+	if len(byUser) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(byUser))
+	}
+
+	anon := byUser["(anonymous)"]
+	if anon == nil {
+		t.Fatal("expected (anonymous) key")
+	}
+	if anon.Requests != 2 {
+		t.Errorf("requests = %d, want 2", anon.Requests)
+	}
+	if anon.Tokens != 150 {
+		t.Errorf("tokens = %d, want 150", anon.Tokens)
+	}
+	if anon.GroupName != "(default)" {
+		t.Errorf("group = %s, want (default)", anon.GroupName)
+	}
+}
+
+func TestAggregateByGroup_Basic(t *testing.T) {
+	records := []*Record{
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 100, Fallbacks: 0, GroupName: "dev", UserName: "alice"},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 200, Fallbacks: 1, GroupName: "dev", UserName: "bob"},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/default", Model: "m1", Tokens: 50, Fallbacks: 0, GroupName: "ops", UserName: "charlie"},
+	}
+
+	byGroup := AggregateByGroup(records)
+
+	if len(byGroup) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(byGroup))
+	}
+
+	dev := byGroup["dev"]
+	if dev == nil {
+		t.Fatal("expected dev key")
+	}
+	if dev.Requests != 2 {
+		t.Errorf("dev requests = %d, want 2", dev.Requests)
+	}
+	if dev.Tokens != 300 {
+		t.Errorf("dev tokens = %d, want 300", dev.Tokens)
+	}
+	if dev.Fallbacks != 1 {
+		t.Errorf("dev fallbacks = %d, want 1", dev.Fallbacks)
+	}
+	if dev.Users != 2 {
+		t.Errorf("dev users = %d, want 2", dev.Users)
+	}
+
+	ops := byGroup["ops"]
+	if ops == nil {
+		t.Fatal("expected ops key")
+	}
+	if ops.Users != 1 {
+		t.Errorf("ops users = %d, want 1", ops.Users)
+	}
+}
+
+func TestAggregateByGroup_DefaultGroup(t *testing.T) {
+	records := []*Record{
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 100, Fallbacks: 0, GroupName: ""},
+		{InstanceID: "inst1", Profile: "", Provider: "p1", Route: "/think", Model: "m1", Tokens: 50, Fallbacks: 0, GroupName: ""},
+	}
+
+	byGroup := AggregateByGroup(records)
+
+	if len(byGroup) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(byGroup))
+	}
+
+	def := byGroup["(default)"]
+	if def == nil {
+		t.Fatal("expected (default) key")
+	}
+	if def.Requests != 2 {
+		t.Errorf("requests = %d, want 2", def.Requests)
+	}
+	if def.Users != 0 {
+		t.Errorf("users = %d, want 0 (empty UserName)", def.Users)
+	}
+}

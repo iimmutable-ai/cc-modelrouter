@@ -59,7 +59,7 @@ type UsageTracker interface {
 // UsageTrackerEx is an optional extension of UsageTracker that supports multi-user fields.
 type UsageTrackerEx interface {
 	Record(instanceID, route, model, profile, provider string, tokens, fallbacks int)
-	RecordWithUser(instanceID, route, model, profile, provider string, tokens, fallbacks int, keyPrefix, groupName string)
+	RecordWithUser(instanceID, route, model, profile, provider string, tokens, fallbacks int, keyPrefix, groupName, userName string)
 }
 
 // Handler handles HTTP requests.
@@ -503,7 +503,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 				profile = userInfo.Profile
 			}
 			if ex, ok := h.usageTracker.(UsageTrackerEx); ok && userInfo != nil {
-				ex.RecordWithUser(h.instanceID, routeName, successfulModel, profile, target.Provider, totalTokens, i, userInfo.KeyPrefix, userInfo.GroupName)
+				ex.RecordWithUser(h.instanceID, routeName, successfulModel, profile, target.Provider, totalTokens, i, userInfo.KeyPrefix, userInfo.GroupName, userInfo.UserName)
 			} else {
 				h.usageTracker.Record(h.instanceID, routeName, successfulModel, profile, target.Provider, totalTokens, i)
 			}
@@ -605,7 +605,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, r *http.Request, req *a
 				profile = userInfo.Profile
 			}
 			if ex, ok := h.usageTracker.(UsageTrackerEx); ok && userInfo != nil {
-				ex.RecordWithUser(h.instanceID, routeName, target.Model, profile, target.Provider, tokensToTrack, i, userInfo.KeyPrefix, userInfo.GroupName)
+				ex.RecordWithUser(h.instanceID, routeName, target.Model, profile, target.Provider, tokensToTrack, i, userInfo.KeyPrefix, userInfo.GroupName, userInfo.UserName)
 			} else {
 				h.usageTracker.Record(h.instanceID, routeName, target.Model, profile, target.Provider, tokensToTrack, i)
 			}

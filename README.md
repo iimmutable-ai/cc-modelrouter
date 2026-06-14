@@ -108,13 +108,6 @@ ccrouter code --conservative    # use default permissions instead
 ccrouter code -- --permission-mode default --model claude-sonnet-4-6
 ```
 
-For standalone mode (use with any Anthropic-compatible client):
-
-```bash
-ccrouter start
-export ANTHROPIC_BASE_URL=http://localhost:8081
-```
-
 See [docs/configuration.md](docs/configuration.md) for the full configuration reference.
 
 > Models are continuously updated — run `ccrouter config` to see the latest.
@@ -150,6 +143,53 @@ Routes are detected automatically from request characteristics. Configure which 
 **Priority order:** Routes are checked in this order: `background` → `subagent` → `review` → `ultrathink` → `thinkMore` → `think` → `image` → `webSearch` → `longContext` → `default`.
 
 **Thinking level cascade:** If `ultrathink` is not configured, it falls back to `thinkMore`, then `think`.
+
+## Standalone Server Mode
+
+Run ccrouter as a standalone server for use with any Anthropic-compatible client — not just Claude Code.
+
+```bash
+# Start on default port (8081)
+ccrouter start
+
+# Custom port and profile
+ccrouter start --port 9090 --profile cost-opt
+
+# With debug logging
+ccrouter start --log-level=debug --log-destination=file
+```
+
+Point any Anthropic-compatible client at the server:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8081
+```
+
+### Generating Claude Code Settings
+
+Use `ccrouter gen settings` to generate a Claude Code `settings.local.json` that pre-configures the proxy URL and API key:
+
+```bash
+# Generate for a specific user (looks up key from keystore)
+ccrouter gen settings --user alice
+
+# Generate with a key directly
+ccrouter gen settings --key sk-ccr-abc123
+
+# Write to a specific file
+ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--url` | `http://localhost:8081` | Router URL |
+| `--user` | | Username to look up API key from keystore |
+| `--key` | | API key directly (overrides `--user`) |
+| `-o` | stdout | Output file path |
+
+For team setups with multiple users, see [Multi-User Mode](#multi-user-mode).
 
 ## Multi-User Mode
 
@@ -197,20 +237,29 @@ Add the `multiUser` section to your config:
 
 ```bash
 # Create a group
-ccrouter groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
+ccrouter keys groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
 
 # Create an API key (save the key — it's shown only once)
 ccrouter keys create --name alice --group developers
 
 # List keys and groups
 ccrouter keys list
-ccrouter groups list
+ccrouter keys groups list
 
 # Revoke a key
 ccrouter keys revoke <id>
 
 # Delete a group (fails if keys reference it)
-ccrouter groups delete <id>
+ccrouter keys groups delete <id>
+
+# View or update multi-user settings
+ccrouter keys settings
+ccrouter keys settings --enabled --global-max 200 --wred-min 0.4 --wred-max 0.85
+
+# Manage group members
+ccrouter keys groups members list <group-id>
+ccrouter keys groups members add <group-id> --user alice
+ccrouter keys groups members remove <group-id> --user alice
 ```
 
 ### Admin API
@@ -228,6 +277,65 @@ All endpoints require localhost + admin token (`/_admin/`):
 | `DELETE` | `/_admin/groups/{id}` | Delete group |
 | `GET` | `/_admin/qos` | QoS stats + provider limits |
 | `POST` | `/_admin/qos/provider/{name}/reset` | Reset provider AIMD |
+
+## QoS (Quality of Service)
+
+When multi-user mode is enabled, ccrouter applies a QoS engine that ensures fair capacity allocation across user groups and prevents provider overload.
+
+### How It Works
+
+**Guaranteed Shares:** Each group gets a guaranteed minimum capacity based on its priority weight: `ceil(globalMax × priorityWeight / totalWeight)`. A group with weight 0.7 and global max 100 gets at least 70 concurrent slots.
+
+**Idle Borrowing:** If a group isn't using its guaranteed share, other groups can borrow the unused capacity. When the owner group needs it back, borrowers are queued.
+
+**WRED (Weighted Random Early Detection):** When a group's queue fills up, requests aren't simply dropped or accepted — WRED applies probabilistic dropping based on queue depth:
+- Queue depth ≤ `wred-min` (default 50%): All requests admitted
+- Queue depth ≥ `wred-max` (default 90%): All requests dropped
+- Between min and max: Linear probability — drop chance increases proportionally with depth
+
+**Provider AIMD:** Each provider has a dynamic concurrency limit that adapts to 429 (rate limit) responses:
+- **Multiplicative decrease:** On sustained 429s (2+ in 60s window), halve the limit; on a single 429, reduce by 20%
+- **Additive increase:** After 10 consecutive successes with no 429s, increment limit by 1
+- Provider limits act as an additional cap: `effectiveCap = min(globalMax, sumOfProviderLimits)`
+
+### Configuration
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `global-max` | int | `0` (auto → 100) | Global max concurrent requests across all groups |
+| `wred-min` | float | `0.5` | Queue depth % where WRED begins dropping |
+| `wred-max` | float | `0.9` | Queue depth % where WRED drops everything |
+| `--priority` | float | `1.0` | Per-group priority weight (0–1) |
+| `--max-concurrency` | int | `0` (unlimited) | Per-group max concurrent requests |
+
+Configure via CLI or the configuration wizard:
+
+```bash
+# CLI
+ccrouter keys settings --global-max 200 --wred-min 0.4 --wred-max 0.85
+ccrouter keys groups update <id> --priority 0.8 --max-concurrency 60
+```
+
+## Configuration Wizard
+
+The interactive TUI wizard (`ccrouter config`) provides a full-screen interface for every configuration option.
+
+**Screens:**
+
+| Screen | Description |
+|--------|-------------|
+| **Main Menu** | Central hub with navigation to all config sections |
+| **Providers** | Add, edit, and delete API providers with transformer selection |
+| **Routes** | Configure routing rules with profile tabs |
+| **Proxy Settings** | Host, port, max retries, retry delay |
+| **Logging** | Log level (debug/info/warn/error), destination (console/file), file path |
+| **Multi-User** | Enable toggle, global max concurrency, WRED min/max thresholds |
+| **API Keys** | List, create, and revoke API keys |
+| **User Groups** | Create and manage groups with profile, priority, and concurrency limits |
+| **View Config** | Read-only view of the full configuration JSON |
+| **Test Connection** | Verify provider connectivity before saving |
+
+Use arrow keys to navigate, Enter to select, Esc to go back, `d`/Del to delete items.
 
 ## Route Profiles
 
@@ -270,84 +378,6 @@ Profiles are defined in your config:
 }
 ```
 
-## Multi-User Mode
-
-Share a single router instance across a team. Each user authenticates with their own API key, with guaranteed capacity allocation per group and automatic provider overload detection.
-
-### Quick Setup
-
-Add the `multiUser` section to your config:
-
-```json
-{
-  "multiUser": {
-    "enabled": true,
-    "globalMaxConcurrency": 100,
-    "groups": [
-      {
-        "name": "developers",
-        "profile": "standard",
-        "priorityWeight": 0.7,
-        "maxConcurrency": 50
-      },
-      {
-        "name": "interns",
-        "profile": "cost-opt",
-        "priorityWeight": 0.3,
-        "maxConcurrency": 10
-      }
-    ]
-  }
-}
-```
-
-### Key Concepts
-
-| Concept | Description |
-|---------|-------------|
-| **API Keys** | `sk-ccr-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
-| **User Groups** | Map keys to routing profiles with QoS settings |
-| **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
-| **Idle Borrowing** | Groups can borrow unused capacity from other groups |
-| **WRED** | Weighted Random Early Detection drops requests when queue is full |
-| **Provider AIMD** | Auto-detects 429s and adjusts concurrency limits (additive increase, multiplicative decrease) |
-
-### CLI Commands
-
-```bash
-# Create a group
-ccrouter groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
-
-# Create an API key (save the key — it's shown only once)
-ccrouter keys create --name alice --group developers
-
-# List keys and groups
-ccrouter keys list
-ccrouter groups list
-
-# Revoke a key
-ccrouter keys revoke <id>
-
-# Delete a group (fails if keys reference it)
-ccrouter groups delete <id>
-```
-
-### Admin API
-
-All endpoints require localhost + admin token (`/_admin/`):
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/_admin/keys` | List API keys |
-| `POST` | `/_admin/keys` | Create API key |
-| `DELETE` | `/_admin/keys/{id}` | Revoke key |
-| `GET` | `/_admin/groups` | List groups |
-| `POST` | `/_admin/groups` | Create group |
-| `PUT` | `/_admin/groups/{id}` | Update group |
-| `DELETE` | `/_admin/groups/{id}` | Delete group |
-| `GET` | `/_admin/qos` | QoS stats + provider limits |
-| `POST` | `/_admin/qos/provider/{name}/reset` | Reset provider AIMD |
-
 ## Auto-Failover
 
 Never lose a session to a provider outage. Define failover chains per route using semicolon-separated `provider:model` pairs — ccrouter automatically tries the next provider if one fails:
@@ -358,15 +388,52 @@ Never lose a session to a provider outage. Define failover chains per route usin
 
 If OpenRouter is down, it seamlessly falls back to GLM, then Gemini. Max attempts = 2× the number of providers in the chain.
 
+## Live Monitor
+
+Real-time token usage dashboard with per-route and per-model breakdowns, live log tailing, and multi-user analytics.
+
+![Live Monitor](assets/monitor-tui.png)
+
+### Tabs (Multi-User Mode)
+
+When multi-user mode is enabled, three additional tabs are available:
+
+| Tab | Key | Description |
+|-----|-----|-------------|
+| **ROUTES** | `o` | Token usage and request counts broken down by route |
+| **USERS** | `u` | Per-user usage breakdown — requests, tokens, and active status |
+| **GROUPS** | `g` | Per-group usage aggregation with member counts and capacity usage |
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `q` / `Ctrl+C` | Quit |
+| `c` | Toggle console log panel |
+| `Space` | Pause/resume log tail |
+| `↑` / `k` | Previous instance |
+| `↓` / `j` | Next instance |
+| `←` / `Shift+Tab` | Previous date range (TODAY → WEEK → MONTH → YTD → TTM) |
+| `→` / `Tab` | Next date range |
+| `r` | Force refresh |
+| `1`–`7` | Toggle log level filters (VERBS, TRACE, DEBUG, INFO, WARN, ERROR, FATAL) |
+| `g` | Switch to GROUPS tab (multi-user only) |
+| `u` | Switch to USERS tab (multi-user only) |
+| `o` | Switch to ROUTES tab (multi-user only) |
+
 ## Features
 
-- **Config Wizard** — full-screen interactive TUI for setup (`ccrouter config`)
+- **Config Wizard** — full-screen interactive TUI for setup (`ccrouter config`) with providers, routes, profiles, server settings, multi-user, API keys, and connectivity testing
 - **Auto Permissions** — `ccrouter code` defaults to `--permission-mode auto` for zero-friction launch
 - **Arg Passthrough** — pass any flags to Claude Code via `--` separator
+- **Standalone Server** — run as a persistent server for any Anthropic-compatible client
+- **Settings Generation** — `ccrouter gen settings` generates Claude Code settings with proxy URL and API key pre-configured
 - **Request Compaction** — automatic request reduction for providers with context window limits
 - **Instance Isolation** — each `ccrouter code` gets its own port, PID, and log file
 - **Project Config** — per-project config completely overrides global settings
-- **Multi-User Support** — Team sharing with API key auth, user groups mapped to routing profiles, and per-group QoS with priority queuing
+- **Multi-User Support** — team sharing with API key auth, user groups mapped to routing profiles, and per-group QoS with priority queuing
+- **QoS Engine** — guaranteed capacity shares with idle borrowing, WRED probabilistic dropping, and provider AIMD overload detection
+- **Per-User/Per-Group Tracking** — live monitor tabs show usage breakdown by user and group
 - **Usage Tracking** — SQLite-based token tracking with buffered writes
 
 ## Security
@@ -375,12 +442,6 @@ If OpenRouter is down, it seamlessly falls back to GLM, then Gemini. Max attempt
 - **Automatic header sanitization** — 11+ sensitive headers redacted case-insensitively (Authorization, X-Api-Key, Cookie, etc.).
 - **Environment variable interpolation** — use `${VAR_NAME}` in config to keep secrets out of config files.
 - **Verified by tests** — security test suite verifies secrets never appear in log output.
-
-## Live Monitor
-
-Real-time token usage dashboard. Track requests, tokens, and fallbacks by route and model — with live log tailing.
-
-![Live Monitor](assets/monitor-tui.png)
 
 ## CLI
 
@@ -394,8 +455,11 @@ Real-time token usage dashboard. Track requests, tokens, and fallbacks by route 
 | `ccrouter monitor` | Live usage monitor (TUI) |
 | `ccrouter profile list` | List route profiles |
 | `ccrouter profile switch <name>` | Switch profile |
+| `ccrouter gen settings` | Generate Claude Code settings.json with proxy URL and API key |
+| `ccrouter keys settings` | View or update multi-user settings (enabled, global-max, WRED) |
 | `ccrouter keys create/list/revoke` | Manage API keys for multi-user mode |
-| `ccrouter groups list/create/update/delete` | Manage user groups for multi-user mode |
+| `ccrouter keys groups list/create/update/delete` | Manage user groups |
+| `ccrouter keys groups members list/add/remove` | Manage group membership |
 
 See [docs/cli-reference.md](docs/cli-reference.md) for the full command reference with all flags.
 

@@ -99,12 +99,24 @@ type RecoveryMsg struct{}
 // FlashTickMsg is sent during flash animation frames
 type FlashTickMsg time.Time
 
+// ContentTab represents the selected content tab in multi-user mode
+type ContentTab int
+
+const (
+	ContentTabRoutes ContentTab = iota
+	ContentTabUsers
+	ContentTabGroups
+)
+
 // UsageStats represents aggregated usage data
 type UsageStats struct {
-	Summary   usage.Summary
-	ByRoute   map[string]*usage.RouteStats
-	ByModel   map[string]*usage.ModelStats
-	Timestamp time.Time
+	Summary     usage.Summary
+	ByRoute     map[string]*usage.RouteStats
+	ByModel     map[string]*usage.ModelStats
+	ByUser      map[string]*usage.UserStats
+	ByGroup     map[string]*usage.GroupStats
+	IsMultiUser bool
+	Timestamp   time.Time
 }
 
 // MonitorModel is the root Bubble Tea model
@@ -128,6 +140,10 @@ type MonitorModel struct {
 	Stats      *UsageStats
 	Instances  []InstanceInfo
 	LogBuffer  *LogBuffer
+
+	// Multi-user tab state
+	IsMultiUser        bool
+	SelectedContentTab ContentTab
 
 	// Flash animation state
 	prevStats        *UsageStats
@@ -284,6 +300,14 @@ func (m *MonitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StatsUpdateMsg:
 		m.Stats = msg.Stats
 		m.LastError = nil
+		// Sync multi-user mode and auto-select tab
+		if msg.Stats.IsMultiUser && !m.IsMultiUser {
+			m.IsMultiUser = true
+			m.SelectedContentTab = ContentTabGroups
+		} else if !msg.Stats.IsMultiUser && m.IsMultiUser {
+			m.IsMultiUser = false
+			m.SelectedContentTab = ContentTabRoutes
+		}
 		// Detect changes for flash animation
 		m.detectChanges(m.prevStats, msg.Stats)
 		m.prevStats = msg.Stats
@@ -419,6 +443,19 @@ func (m *MonitorModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		// Force refresh
 		m.refreshStats()
+
+	case "g":
+		if m.IsMultiUser {
+			m.SelectedContentTab = ContentTabGroups
+		}
+	case "u":
+		if m.IsMultiUser {
+			m.SelectedContentTab = ContentTabUsers
+		}
+	case "o":
+		if m.IsMultiUser {
+			m.SelectedContentTab = ContentTabRoutes
+		}
 	}
 
 	return m, nil
@@ -555,6 +592,40 @@ func (m *MonitorModel) detectChanges(prev, curr *UsageStats) {
 			// New model appeared — flash all its fields
 			m.flashCells["model:"+name+":requests"] = now
 			m.flashCells["model:"+name+":tokens"] = now
+		}
+	}
+
+	// User fields
+	for name, stats := range curr.ByUser {
+		if prevUser, ok := prev.ByUser[name]; ok {
+			if prevUser.Requests != stats.Requests {
+				m.flashCells["user:"+name+":requests"] = now
+			}
+			if prevUser.Tokens != stats.Tokens {
+				m.flashCells["user:"+name+":tokens"] = now
+			}
+		} else {
+			m.flashCells["user:"+name+":requests"] = now
+			m.flashCells["user:"+name+":tokens"] = now
+		}
+	}
+
+	// Group fields
+	for name, stats := range curr.ByGroup {
+		if prevGroup, ok := prev.ByGroup[name]; ok {
+			if prevGroup.Requests != stats.Requests {
+				m.flashCells["group:"+name+":requests"] = now
+			}
+			if prevGroup.Tokens != stats.Tokens {
+				m.flashCells["group:"+name+":tokens"] = now
+			}
+			if prevGroup.Fallbacks != stats.Fallbacks {
+				m.flashCells["group:"+name+":fallbacks"] = now
+			}
+		} else {
+			m.flashCells["group:"+name+":requests"] = now
+			m.flashCells["group:"+name+":tokens"] = now
+			m.flashCells["group:"+name+":fallbacks"] = now
 		}
 	}
 }

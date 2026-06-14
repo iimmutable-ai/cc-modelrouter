@@ -23,6 +23,7 @@ type Record struct {
 	Timestamp     time.Time
 	APIKeyPrefix  string // prefix of the API key used (multi-user)
 	GroupName     string // user group name (multi-user)
+	UserName      string // user name (multi-user)
 }
 
 // DBPath returns the path to the usage database.
@@ -212,6 +213,7 @@ func migrateColumns(db *sql.DB) {
 		{"provider", "TEXT NOT NULL DEFAULT ''"},
 		{"api_key_prefix", "TEXT NOT NULL DEFAULT ''"},
 		{"group_name", "TEXT NOT NULL DEFAULT ''"},
+		{"user_name", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		var count int
@@ -233,10 +235,10 @@ type dbExecutor interface {
 // InsertRecord inserts a usage record.
 func InsertRecord(db dbExecutor, r *Record) error {
 	query := `
-	INSERT INTO usage_records (instance_id, profile, provider, route, model, tokens, fallbacks, timestamp, api_key_prefix, group_name)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO usage_records (instance_id, profile, provider, route, model, tokens, fallbacks, timestamp, api_key_prefix, group_name, user_name)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := db.Exec(query, r.InstanceID, r.Profile, r.Provider, r.Route, r.Model, r.Tokens, r.Fallbacks, r.Timestamp, r.APIKeyPrefix, r.GroupName)
+	_, err := db.Exec(query, r.InstanceID, r.Profile, r.Provider, r.Route, r.Model, r.Tokens, r.Fallbacks, r.Timestamp, r.APIKeyPrefix, r.GroupName, r.UserName)
 	return err
 }
 
@@ -275,7 +277,7 @@ func DeleteAllRecords(db *sql.DB) (int64, error) {
 // GetRecordsByPeriod retrieves records within a time range, optionally filtered by instance.
 func GetRecordsByPeriod(db *sql.DB, instanceID string, start, end time.Time) ([]*Record, error) {
 	query := `
-	SELECT id, instance_id, profile, provider, route, model, tokens, fallbacks, timestamp, api_key_prefix, group_name
+	SELECT id, instance_id, profile, provider, route, model, tokens, fallbacks, timestamp, api_key_prefix, group_name, user_name
 	FROM usage_records
 	WHERE timestamp >= ? AND timestamp <= ?
 	`
@@ -297,7 +299,7 @@ func GetRecordsByPeriod(db *sql.DB, instanceID string, start, end time.Time) ([]
 	var records []*Record
 	for rows.Next() {
 		var r Record
-		err := rows.Scan(&r.ID, &r.InstanceID, &r.Profile, &r.Provider, &r.Route, &r.Model, &r.Tokens, &r.Fallbacks, &r.Timestamp, &r.APIKeyPrefix, &r.GroupName)
+		err := rows.Scan(&r.ID, &r.InstanceID, &r.Profile, &r.Provider, &r.Route, &r.Model, &r.Tokens, &r.Fallbacks, &r.Timestamp, &r.APIKeyPrefix, &r.GroupName, &r.UserName)
 		if err != nil {
 			return nil, err
 		}
