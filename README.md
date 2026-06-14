@@ -197,29 +197,28 @@ Share a single router instance across a team. Each user authenticates with their
 
 ### Quick Setup
 
-Add the `multiUser` section to your config:
+Run the configuration wizard and navigate to **Multi-User** (option 6):
 
-```json
-{
-  "multiUser": {
-    "enabled": true,
-    "globalMaxConcurrency": 100,
-    "groups": [
-      {
-        "name": "developers",
-        "profile": "standard",
-        "priorityWeight": 0.7,
-        "maxConcurrency": 50
-      },
-      {
-        "name": "interns",
-        "profile": "cost-opt",
-        "priorityWeight": 0.3,
-        "maxConcurrency": 10
-      }
-    ]
-  }
-}
+```bash
+ccrouter config
+```
+
+1. Select **Multi-User** → enable the toggle and set Global Max Concurrency and WRED thresholds
+2. Select **User Groups** → create a group (name, route profile, priority, max concurrency)
+3. Select **API Keys** → create a key for each user and assign to a group
+4. Choose **Save & Exit** from the main menu to persist everything
+
+Or set up entirely from the CLI:
+
+```bash
+# Enable multi-user mode
+ccrouter keys settings --enabled
+
+# Create a group
+ccrouter keys groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
+
+# Create an API key (save the key — it's shown only once)
+ccrouter keys create --name alice --group developers
 ```
 
 ### Key Concepts
