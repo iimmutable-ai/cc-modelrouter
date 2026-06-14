@@ -151,6 +151,84 @@ Routes are detected automatically from request characteristics. Configure which 
 
 **Thinking level cascade:** If `ultrathink` is not configured, it falls back to `thinkMore`, then `think`.
 
+## Multi-User Mode
+
+Share a single router instance across a team. Each user authenticates with their own API key, with guaranteed capacity allocation per group and automatic provider overload detection.
+
+### Quick Setup
+
+Add the `multiUser` section to your config:
+
+```json
+{
+  "multiUser": {
+    "enabled": true,
+    "globalMaxConcurrency": 100,
+    "groups": [
+      {
+        "name": "developers",
+        "profile": "standard",
+        "priorityWeight": 0.7,
+        "maxConcurrency": 50
+      },
+      {
+        "name": "interns",
+        "profile": "cost-opt",
+        "priorityWeight": 0.3,
+        "maxConcurrency": 10
+      }
+    ]
+  }
+}
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **API Keys** | `sk-ccrouter-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
+| **User Groups** | Map keys to routing profiles with QoS settings |
+| **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
+| **Idle Borrowing** | Groups can borrow unused capacity from other groups |
+| **WRED** | Weighted Random Early Detection drops requests when queue is full |
+| **Provider AIMD** | Auto-detects 429s and adjusts concurrency limits (additive increase, multiplicative decrease) |
+
+### CLI Commands
+
+```bash
+# Create a group
+ccrouter groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
+
+# Create an API key (save the key — it's shown only once)
+ccrouter keys create --name alice --group developers
+
+# List keys and groups
+ccrouter keys list
+ccrouter groups list
+
+# Revoke a key
+ccrouter keys revoke <id>
+
+# Delete a group (fails if keys reference it)
+ccrouter groups delete <id>
+```
+
+### Admin API
+
+All endpoints require localhost + admin token (`/_admin/`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/_admin/keys` | List API keys |
+| `POST` | `/_admin/keys` | Create API key |
+| `DELETE` | `/_admin/keys/{id}` | Revoke key |
+| `GET` | `/_admin/groups` | List groups |
+| `POST` | `/_admin/groups` | Create group |
+| `PUT` | `/_admin/groups/{id}` | Update group |
+| `DELETE` | `/_admin/groups/{id}` | Delete group |
+| `GET` | `/_admin/qos` | QoS stats + provider limits |
+| `POST` | `/_admin/qos/provider/{name}/reset` | Reset provider AIMD |
+
 ## Route Profiles
 
 Switch between entire routing configurations without restarting. Perfect for toggling between "standard", "cost-optimized", or "speed-first" strategies on the fly.
@@ -192,6 +270,84 @@ Profiles are defined in your config:
 }
 ```
 
+## Multi-User Mode
+
+Share a single router instance across a team. Each user authenticates with their own API key, with guaranteed capacity allocation per group and automatic provider overload detection.
+
+### Quick Setup
+
+Add the `multiUser` section to your config:
+
+```json
+{
+  "multiUser": {
+    "enabled": true,
+    "globalMaxConcurrency": 100,
+    "groups": [
+      {
+        "name": "developers",
+        "profile": "standard",
+        "priorityWeight": 0.7,
+        "maxConcurrency": 50
+      },
+      {
+        "name": "interns",
+        "profile": "cost-opt",
+        "priorityWeight": 0.3,
+        "maxConcurrency": 10
+      }
+    ]
+  }
+}
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **API Keys** | `sk-ccrouter-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
+| **User Groups** | Map keys to routing profiles with QoS settings |
+| **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
+| **Idle Borrowing** | Groups can borrow unused capacity from other groups |
+| **WRED** | Weighted Random Early Detection drops requests when queue is full |
+| **Provider AIMD** | Auto-detects 429s and adjusts concurrency limits (additive increase, multiplicative decrease) |
+
+### CLI Commands
+
+```bash
+# Create a group
+ccrouter groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
+
+# Create an API key (save the key — it's shown only once)
+ccrouter keys create --name alice --group developers
+
+# List keys and groups
+ccrouter keys list
+ccrouter groups list
+
+# Revoke a key
+ccrouter keys revoke <id>
+
+# Delete a group (fails if keys reference it)
+ccrouter groups delete <id>
+```
+
+### Admin API
+
+All endpoints require localhost + admin token (`/_admin/`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/_admin/keys` | List API keys |
+| `POST` | `/_admin/keys` | Create API key |
+| `DELETE` | `/_admin/keys/{id}` | Revoke key |
+| `GET` | `/_admin/groups` | List groups |
+| `POST` | `/_admin/groups` | Create group |
+| `PUT` | `/_admin/groups/{id}` | Update group |
+| `DELETE` | `/_admin/groups/{id}` | Delete group |
+| `GET` | `/_admin/qos` | QoS stats + provider limits |
+| `POST` | `/_admin/qos/provider/{name}/reset` | Reset provider AIMD |
+
 ## Auto-Failover
 
 Never lose a session to a provider outage. Define failover chains per route using semicolon-separated `provider:model` pairs — ccrouter automatically tries the next provider if one fails:
@@ -210,6 +366,7 @@ If OpenRouter is down, it seamlessly falls back to GLM, then Gemini. Max attempt
 - **Request Compaction** — automatic request reduction for providers with context window limits
 - **Instance Isolation** — each `ccrouter code` gets its own port, PID, and log file
 - **Project Config** — per-project config completely overrides global settings
+- **Multi-User Support** — Team sharing with API key auth, user groups mapped to routing profiles, and per-group QoS with priority queuing
 - **Usage Tracking** — SQLite-based token tracking with buffered writes
 
 ## Security
@@ -237,6 +394,8 @@ Real-time token usage dashboard. Track requests, tokens, and fallbacks by route 
 | `ccrouter monitor` | Live usage monitor (TUI) |
 | `ccrouter profile list` | List route profiles |
 | `ccrouter profile switch <name>` | Switch profile |
+| `ccrouter keys create/list/revoke` | Manage API keys for multi-user mode |
+| `ccrouter groups list/create/update/delete` | Manage user groups for multi-user mode |
 
 See [docs/cli-reference.md](docs/cli-reference.md) for the full command reference with all flags.
 
@@ -259,6 +418,7 @@ go test -v ./test/security   # security tests
 cc-modelrouter/
 ├── cmd/ccrouter/              # CLI entry point
 ├── internal/
+│   ├── auth/                  # API key management and validation (multi-user)
 │   ├── cli/                   # Cobra commands
 │   ├── config/                # Config loading with env var interpolation
 │   ├── configwizard/          # Interactive TUI wizard (Bubble Tea)
@@ -268,6 +428,7 @@ cc-modelrouter/
 │   ├── monitor/               # Live usage monitor (TUI)
 │   ├── provider/              # HTTP clients for provider APIs
 │   ├── proxy/                 # HTTP proxy server and request handler
+│   ├── qos/                   # QoS engine with WRED and provider capacity tracking
 │   ├── router/                # Route detection and sequential failover
 │   ├── transformer/           # Format transformers (Anthropic, OpenAI, Gemini, GLM)
 │   └── usage/                 # SQLite usage tracking

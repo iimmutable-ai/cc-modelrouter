@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iimmutable/cc-modelrouter/internal/auth"
 	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable/cc-modelrouter/internal/qos"
 	"github.com/iimmutable/cc-modelrouter/internal/logging"
 	"github.com/iimmutable/cc-modelrouter/internal/router"
 	"github.com/iimmutable/cc-modelrouter/internal/transformer"
@@ -54,6 +56,12 @@ type UsageTracker interface {
 	Record(instanceID, route, model, profile, provider string, tokens, fallbacks int)
 }
 
+// UsageTrackerEx is an optional extension of UsageTracker that supports multi-user fields.
+type UsageTrackerEx interface {
+	Record(instanceID, route, model, profile, provider string, tokens, fallbacks int)
+	RecordWithUser(instanceID, route, model, profile, provider string, tokens, fallbacks int, keyPrefix, groupName string)
+}
+
 // Handler handles HTTP requests.
 type Handler struct {
 	maxRequestSize        int64
@@ -70,6 +78,9 @@ type Handler struct {
 	responseInterceptors  []ResponseInterceptor
 	streamingInterceptors []StreamingResponseInterceptor
 	adminToken            string // Token for admin API authentication
+	multiUserEnabled      bool   // When true, require Bearer token authentication
+	authInterceptor       *AuthInterceptor
+	qosEngine            *qos.QoSEngine // nil when multi-user disabled
 }
 
 // NewHandler creates a new handler.
@@ -140,6 +151,29 @@ func (h *Handler) SetAdminToken(token string) {
 // GetAdminToken returns the admin API token.
 func (h *Handler) GetAdminToken() string {
 	return h.adminToken
+}
+
+// SetMultiUserEnabled enables or disables multi-user authentication.
+func (h *Handler) SetMultiUserEnabled(enabled bool) {
+	h.multiUserEnabled = enabled
+}
+
+// SetAuthInterceptor sets the auth interceptor for multi-user mode.
+func (h *Handler) SetAuthInterceptor(ai *AuthInterceptor) {
+	h.authInterceptor = ai
+}
+
+// GetKeyStore returns the auth KeyStore, if multi-user is enabled.
+func (h *Handler) GetKeyStore() *auth.KeyStore {
+	if h.authInterceptor != nil {
+		return h.authInterceptor.KeyStore
+	}
+	return nil
+}
+
+// GetQoSEngine returns the QoS engine, if set.
+func (h *Handler) GetQoSEngine() *qos.QoSEngine {
+	return h.qosEngine
 }
 
 // GetConfig returns the current configuration (thread-safe).
@@ -247,6 +281,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Multi-user authentication: extract Bearer token and authenticate
+	var userInfo *auth.UserInfo
+	if h.multiUserEnabled {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			WriteAuthError(w, http.StatusUnauthorized, "Missing or invalid Authorization header")
+			return
+		}
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+
+		info, err := h.authInterceptor.Authenticate(token)
+		if err != nil {
+			WriteAuthError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		userInfo = info
+
+		// Enrich context with user info for downstream use
+		ctx := context.WithValue(r.Context(), CtxKeyUser, userInfo)
+		r = r.WithContext(ctx)
+
+		// QoS admission control
+		if h.qosEngine != nil && userInfo != nil {
+			if err := h.qosEngine.Admit(r.Context(), userInfo.GroupName); err != nil {
+				WriteQoSRejected(w, err.Error())
+				return
+			}
+			defer h.qosEngine.Release(userInfo.GroupName)
+		}
+	}
+
 	// Supported Anthropic API v1 endpoints
 	supportedPaths := []string{
 		"/v1/messages",
@@ -304,7 +369,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.Model, len(req.Messages), req.Stream)
 
 		// Handle the request
-		h.handleMessages(w, r, &req)
+		h.handleMessages(w, r, &req, userInfo)
 		return
 	}
 
@@ -312,7 +377,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMessages processes the messages request.
-func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *anthropic.Request) {
+func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *anthropic.Request, userInfo *auth.UserInfo) {
 	// Call request interceptors
 	for _, interceptor := range h.requestInterceptors {
 		if err := interceptor.InterceptRequest(r.Context(), req); err != nil {
@@ -343,14 +408,30 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 		IsSubagent:   h.isSubagent(req),
 	}
 	routeName := h.router.DetectRoute(routeReq)
-	targets := h.router.GetTargets(routeName)
+
+	// Resolve targets: use user's group profile if authenticated and set
+	var targets []config.RouteTarget
+	if userInfo != nil && userInfo.Profile != "" {
+		h.configMu.RLock()
+		if len(h.config.Router.Profiles) > 0 {
+			if profile, ok := h.config.Router.Profiles[userInfo.Profile]; ok {
+				if route, ok := profile.Routes[routeName]; ok {
+					targets = config.ParseRoute(route)
+				}
+			}
+		}
+		h.configMu.RUnlock()
+	}
+	if targets == nil {
+		targets = h.router.GetTargets(routeName)
+	}
 
 	logging.Infof("[ROUTE] Detected: %s (bg=%v sub=%v review=%v think=%d img=%v web=%v tokens=%d), Targets: %d",
 		routeName, routeReq.IsBackground, routeReq.IsSubagent, routeReq.IsReview, routeReq.ThinkLevel, routeReq.HasImages, routeReq.HasWebSearch, routeReq.TokenCount, len(targets))
 
 	// Handle streaming requests
 	if req.Stream {
-		h.handleStreaming(w, r, req, routeName, targets)
+		h.handleStreaming(w, r, req, routeName, targets, userInfo)
 		return
 	}
 
@@ -404,7 +485,16 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 				logging.Infof("[USAGE] Tracking actual usage: %d tokens (input=%d, output=%d)",
 					totalTokens, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 			}
-			h.usageTracker.Record(h.instanceID, routeName, successfulModel, h.activeProfile, target.Provider, totalTokens, i)
+			// Use user's group profile if authenticated
+			profile := h.activeProfile
+			if userInfo != nil && userInfo.Profile != "" {
+				profile = userInfo.Profile
+			}
+			if ex, ok := h.usageTracker.(UsageTrackerEx); ok && userInfo != nil {
+				ex.RecordWithUser(h.instanceID, routeName, successfulModel, profile, target.Provider, totalTokens, i, userInfo.KeyPrefix, userInfo.GroupName)
+			} else {
+				h.usageTracker.Record(h.instanceID, routeName, successfulModel, profile, target.Provider, totalTokens, i)
+			}
 		}
 
 		// Log response details
@@ -426,7 +516,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 }
 
 // handleStreaming processes a streaming messages request.
-func (h *Handler) handleStreaming(w http.ResponseWriter, r *http.Request, req *anthropic.Request, routeName string, targets []config.RouteTarget) {
+func (h *Handler) handleStreaming(w http.ResponseWriter, r *http.Request, req *anthropic.Request, routeName string, targets []config.RouteTarget, userInfo *auth.UserInfo) {
 	// Call request interceptors
 	for _, interceptor := range h.requestInterceptors {
 		if err := interceptor.InterceptRequest(r.Context(), req); err != nil {
@@ -497,7 +587,16 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, r *http.Request, req *a
 			} else {
 				logging.Streamf("[USAGE] Tracking actual usage: %d tokens", tokensToTrack)
 			}
-			h.usageTracker.Record(h.instanceID, routeName, target.Model, h.activeProfile, target.Provider, tokensToTrack, i)
+			// Use user's group profile if authenticated
+			profile := h.activeProfile
+			if userInfo != nil && userInfo.Profile != "" {
+				profile = userInfo.Profile
+			}
+			if ex, ok := h.usageTracker.(UsageTrackerEx); ok && userInfo != nil {
+				ex.RecordWithUser(h.instanceID, routeName, target.Model, profile, target.Provider, tokensToTrack, i, userInfo.KeyPrefix, userInfo.GroupName)
+			} else {
+				h.usageTracker.Record(h.instanceID, routeName, target.Model, profile, target.Provider, tokensToTrack, i)
+			}
 		}
 		logging.Streamf("Stream completed with %s/%s, fallbacks: %d", target.Provider, target.Model, i)
 		return

@@ -48,6 +48,7 @@ Use "ccrouter [command] --help" for more information about a command.`,
 	cmd.AddCommand(NewLogsCommand())
 	cmd.AddCommand(NewMonitorCommand())
 	cmd.AddCommand(NewProfileCommand())
+	cmd.AddCommand(NewKeysCommand())
 
 	return cmd
 }

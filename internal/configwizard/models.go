@@ -2,6 +2,7 @@ package configwizard
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/iimmutable/cc-modelrouter/internal/config"
@@ -51,6 +52,10 @@ type WizardState struct {
 	ProviderPreset       string // "anthropic", "openrouter", "bigmodel", "gemini", "custom"
 	EditingProvider      bool   // true when editing an existing provider
 
+	// Advanced provider settings
+	NewProviderDisableKeepAlives   bool
+	NewProviderMaxRequestBodyBytes string
+
 	// Add provider state (Step 2)
 	NewProviderAPIKey      string
 	AddToShellConfig       bool
@@ -67,10 +72,12 @@ type WizardState struct {
 	SelectedModel       string
 
 	// Server screen state
-	ServerHost    string
-	ServerPort    string
-	PortStatus    string // non-empty = port availability status (warning or success)
-	PortTesting   bool   // true while port availability test is running
+	ServerHost        string
+	ServerPort        string
+	ServerMaxRetries  string
+	ServerRetryDelay  string
+	PortStatus        string // non-empty = port availability status (warning or success)
+	PortTesting       bool   // true while port availability test is running
 
 	// Logging screen state
 	LoggingEnabled    bool
@@ -171,6 +178,11 @@ var ProviderPresets = map[string]ProviderPreset{
 		Transformer: "anthropic",
 		Models:      []string{"anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.5", "anthropic/claude-opus-4.6"},
 	},
+	"gemini": {
+		BaseURL:     "https://generativelanguage.googleapis.com",
+		Transformer: "gemini",
+		Models:      []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"},
+	},
 }
 
 // PredefinedRouteNames are the built-in route names.
@@ -227,6 +239,8 @@ func NewWizardState(cfg *config.Config, configPath string) *WizardState {
 		LoggingEnabled:        cfg.Logging.Enabled,
 		ServerHost:            cfg.Server.Host,
 		ServerPort:            "8081",
+		ServerMaxRetries:      strconv.Itoa(cfg.Router.MaxRetries),
+		ServerRetryDelay:      cfg.Router.RetryDelay,
 	}
 }
 

@@ -65,6 +65,22 @@ func (t *Tracker) Record(instanceID, route, model, profile, provider string, tok
 	}
 }
 
+// RecordWithUser adds a usage record with multi-user context via a buffered channel.
+func (t *Tracker) RecordWithUser(instanceID, route, model, profile, provider string, tokens, fallbacks int, keyPrefix, groupName string) {
+	t.recordCh <- &Record{
+		InstanceID:   instanceID,
+		Profile:      profile,
+		Provider:     provider,
+		Route:        route,
+		Model:        model,
+		Tokens:       tokens,
+		Fallbacks:    fallbacks,
+		Timestamp:    time.Now(),
+		APIKeyPrefix: keyPrefix,
+		GroupName:    groupName,
+	}
+}
+
 // flush writes buffered records to database.
 // Called only from the flushLoop goroutine — no mutex needed.
 func (t *Tracker) flush(records []*Record) {

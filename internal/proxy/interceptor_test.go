@@ -146,7 +146,7 @@ func TestHandler_RequestInterceptorCalled(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if !interceptor.called {
 		t.Error("expected request interceptor to be called")
@@ -196,7 +196,7 @@ func TestHandler_ResponseInterceptorCalled(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if !interceptor.called {
 		t.Error("expected response interceptor to be called")
@@ -223,7 +223,7 @@ func TestHandler_RequestInterceptorError(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", w.Code)
@@ -278,7 +278,7 @@ func TestHandler_ResponseInterceptorError(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected status 500, got %d", w.Code)
@@ -572,7 +572,7 @@ data: {"type":"message_stop","stop_reason":"end_turn"}
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
 
-	handler.handleStreaming(w, req, anthropicReq, "test-route", []config.RouteTarget{{Provider: "anthropic", Model: "claude-3"}})
+	handler.handleStreaming(w, req, anthropicReq, "test-route", []config.RouteTarget{{Provider: "anthropic", Model: "claude-3"}}, nil)
 
 	if !interceptor.called {
 		t.Error("expected streaming interceptor to be called")

@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iimmutable/cc-modelrouter/internal/auth"
 	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable/cc-modelrouter/internal/qos"
 	"github.com/iimmutable/cc-modelrouter/internal/daemon"
 	"github.com/iimmutable/cc-modelrouter/internal/logging"
 	"github.com/iimmutable/cc-modelrouter/internal/provider"
@@ -276,6 +278,49 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Generate admin token for runtime profile management
 	adminToken := daemon.GenerateAdminToken()
 	server.SetAdminToken(adminToken)
+
+	// Multi-user mode: initialize KeyStore and auth interceptor
+	if cfg.MultiUser.Enabled {
+		keyStore := auth.NewKeyStore(usageDB)
+
+		// Create default group if none exist
+		groups, err := keyStore.ListGroups()
+		if err != nil {
+			return fmt.Errorf("failed to list groups: %w", err)
+		}
+		if len(groups) == 0 {
+			// Seed groups from config
+			for _, gc := range cfg.MultiUser.Groups {
+				if _, err := keyStore.CreateGroup(gc.Name, gc.Profile, gc.PriorityWeight, gc.MaxConcurrency); err != nil {
+					return fmt.Errorf("failed to create group %s: %w", gc.Name, err)
+				}
+			}
+		}
+
+		ai := proxy.NewAuthInterceptor(keyStore)
+		server.SetAuthInterceptor(ai)
+		server.SetMultiUserEnabled(true)
+
+		// Initialize QoS engine with groups from KeyStore
+		groups, _ = keyStore.ListGroups()
+		qosGroupCfgs := make([]qos.GroupConfig, len(groups))
+		for i, g := range groups {
+			qosGroupCfgs[i] = qos.GroupConfig{
+				Name:           g.Name,
+				PriorityWeight:  g.PriorityWeight,
+				MaxConcurrency: g.MaxConcurrency,
+			}
+		}
+		wredCfg := qos.WREDConfig{
+			MinDepth: cfg.MultiUser.WREDMinDepth,
+			MaxDepth: cfg.MultiUser.WREDMaxDepth,
+		}
+		globalMax := cfg.MultiUser.GlobalMaxConc
+		qosEngine := qos.NewQoSEngine(globalMax, wredCfg, qosGroupCfgs)
+		server.SetQoSEngine(qosEngine)
+
+		fmt.Println("Multi-user mode enabled: API key authentication required")
+	}
 
 	// Initialize handler's active profile
 	server.SetActiveProfile(profileName)

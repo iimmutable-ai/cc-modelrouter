@@ -12,15 +12,17 @@ import (
 
 // Record represents a usage record.
 type Record struct {
-	ID         int64
-	InstanceID string
-	Profile    string // active route profile name
-	Provider   string // provider that handled the request
-	Route      string
-	Model      string
-	Tokens     int
-	Fallbacks  int
-	Timestamp  time.Time
+	ID            int64
+	InstanceID    string
+	Profile       string // active route profile name
+	Provider      string // provider that handled the request
+	Route         string
+	Model         string
+	Tokens        int
+	Fallbacks     int
+	Timestamp     time.Time
+	APIKeyPrefix  string // prefix of the API key used (multi-user)
+	GroupName     string // user group name (multi-user)
 }
 
 // DBPath returns the path to the usage database.
@@ -101,6 +103,36 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create indexes: %w", err)
 	}
 
+	// Phase 4: Create multi-user tables (api_keys, user_groups)
+	multiUserQuery := `
+	CREATE TABLE IF NOT EXISTS user_groups (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		name            TEXT NOT NULL UNIQUE,
+		profile         TEXT NOT NULL DEFAULT '',
+		priority_weight REAL NOT NULL DEFAULT 1.0,
+		max_concurrency INTEGER NOT NULL DEFAULT 0,
+		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS api_keys (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		key_hash    TEXT NOT NULL UNIQUE,
+		key_prefix  TEXT NOT NULL,
+		name        TEXT NOT NULL DEFAULT '',
+		group_id    INTEGER NOT NULL,
+		is_active   INTEGER NOT NULL DEFAULT 1,
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		last_used   DATETIME,
+		FOREIGN KEY (group_id) REFERENCES user_groups(id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_group ON api_keys(group_id);
+	`
+	if _, err := db.Exec(multiUserQuery); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create multi-user tables: %w", err)
+	}
+
 	return db, nil
 }
 
@@ -112,6 +144,8 @@ func migrateColumns(db *sql.DB) {
 	}{
 		{"profile", "TEXT NOT NULL DEFAULT ''"},
 		{"provider", "TEXT NOT NULL DEFAULT ''"},
+		{"api_key_prefix", "TEXT NOT NULL DEFAULT ''"},
+		{"group_name", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		var count int
@@ -133,10 +167,10 @@ type dbExecutor interface {
 // InsertRecord inserts a usage record.
 func InsertRecord(db dbExecutor, r *Record) error {
 	query := `
-	INSERT INTO usage_records (instance_id, profile, provider, route, model, tokens, fallbacks, timestamp)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO usage_records (instance_id, profile, provider, route, model, tokens, fallbacks, timestamp, api_key_prefix, group_name)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := db.Exec(query, r.InstanceID, r.Profile, r.Provider, r.Route, r.Model, r.Tokens, r.Fallbacks, r.Timestamp)
+	_, err := db.Exec(query, r.InstanceID, r.Profile, r.Provider, r.Route, r.Model, r.Tokens, r.Fallbacks, r.Timestamp, r.APIKeyPrefix, r.GroupName)
 	return err
 }
 
@@ -175,7 +209,7 @@ func DeleteAllRecords(db *sql.DB) (int64, error) {
 // GetRecordsByPeriod retrieves records within a time range, optionally filtered by instance.
 func GetRecordsByPeriod(db *sql.DB, instanceID string, start, end time.Time) ([]*Record, error) {
 	query := `
-	SELECT id, instance_id, profile, provider, route, model, tokens, fallbacks, timestamp
+	SELECT id, instance_id, profile, provider, route, model, tokens, fallbacks, timestamp, api_key_prefix, group_name
 	FROM usage_records
 	WHERE timestamp >= ? AND timestamp <= ?
 	`
@@ -197,7 +231,7 @@ func GetRecordsByPeriod(db *sql.DB, instanceID string, start, end time.Time) ([]
 	var records []*Record
 	for rows.Next() {
 		var r Record
-		err := rows.Scan(&r.ID, &r.InstanceID, &r.Profile, &r.Provider, &r.Route, &r.Model, &r.Tokens, &r.Fallbacks, &r.Timestamp)
+		err := rows.Scan(&r.ID, &r.InstanceID, &r.Profile, &r.Provider, &r.Route, &r.Model, &r.Tokens, &r.Fallbacks, &r.Timestamp, &r.APIKeyPrefix, &r.GroupName)
 		if err != nil {
 			return nil, err
 		}

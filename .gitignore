@@ -55,3 +55,4 @@ package.json
 
 # Dev artifacts (auto-excluded by merge-trunk)
 .claude/
+kndy-settings.json

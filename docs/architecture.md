@@ -16,6 +16,16 @@ cc-modelrouter is built as a layered architecture with clear separation of conce
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────────────────────────────────────┐
+│ Auth Layer (multi-user)                                     │
+│ (bearer token validation, user/group resolution)           │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│ QoS Layer (multi-user)                                     │
+│ (admission control, priority queuing, WRED)                 │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
 │ Router Engine Layer                                         │
 │ (route matching, failover logic, model selection)           │
 └─────────────────────────────────────────────────────────────┘
@@ -79,7 +89,9 @@ HTTP server implementing the Anthropic Messages API endpoint.
 **Key Components:**
 - `Server` - HTTP server with graceful shutdown
 - `Handler` - Request handler for `/v1/messages`
-- `AdminHandler` - Runtime profile management API (localhost-only, token-authenticated)
+- `AdminHandler` - Runtime profile management and multi-user API (localhost-only, token-authenticated)
+- `AuthInterceptor` - API key validation and user/group resolution (multi-user)
+- `QoSInterceptor` - Admission control with priority queuing and WRED (multi-user)
 - `Compactor` - Request compaction for providers with context window limits
 - `SSEWriter` - Server-Sent Events streaming
 
@@ -90,6 +102,15 @@ HTTP server implementing the Anthropic Messages API endpoint.
 | `GET` | `/_admin/profiles` | List all configured profiles |
 | `GET` | `/_admin/profiles/active` | Get the currently active profile |
 | `POST` | `/_admin/profiles/switch` | Switch to a different profile |
+| `GET` | `/_admin/keys` | List all API keys (multi-user) |
+| `POST` | `/_admin/keys` | Create an API key (multi-user) |
+| `DELETE` | `/_admin/keys/{id}` | Revoke an API key (multi-user) |
+| `GET` | `/_admin/groups` | List all user groups (multi-user) |
+| `POST` | `/_admin/groups` | Create a user group (multi-user) |
+| `PUT` | `/_admin/groups/{id}` | Update a user group (multi-user) |
+| `DELETE` | `/_admin/groups/{id}` | Delete a user group (multi-user) |
+| `GET` | `/_admin/qos` | QoS stats and provider capacity limits (multi-user) |
+| `POST` | `/_admin/qos/provider/{name}/reset` | Reset provider AIMD capacity (multi-user) |
 
 All endpoints require `localhost` access and a valid `X-Admin-Token` header (or `?token=` query parameter). The admin token is generated at instance startup and stored in instance metadata.
 
@@ -196,6 +217,8 @@ Manages router instance lifecycle.
 
 ## Request Flow
 
+### Single-User Mode (default)
+
 ```
 Claude Code                    cc-modelrouter                    Provider
     │                               │                               │
@@ -223,6 +246,34 @@ Claude Code                    cc-modelrouter                    Provider
     │  Response (or streaming)      │                               │
     │<──────────────────────────────│                               │
     │                               │                               │
+```
+
+### Multi-User Mode
+
+```
+Client (Claude Code)                    Router Server
+  │                                        │
+  │ POST /v1/messages                      │
+  │ Authorization: Bearer sk-ccrouter-..   │
+  │--------------------------------------->│
+  │                                        │
+  │  ServeHTTP                             │
+  │    1. Extract Bearer token             │
+  │    2. AuthInterceptor validates key    │
+  │       → resolves user + group +       │
+  │          profile from SQLite            │
+  │    3. QoSInterceptor admits/queues    │
+  │       → WRED drop probability check    │
+  │       → wait in priority queue         │
+  │    4. Route detection (existing)       │
+  │       → uses group's profile routes    │
+  │    5. Failover to provider (existing)   │
+  │    6. ProviderCapacityTracker          │
+  │       → feedback on 429/success         │
+  │    7. QoS release → admit next         │
+  │    8. Usage tracking (extended)         │
+  │                                        │
+  │<---------------------------------------│
 ```
 
 ## Instance Isolation
@@ -327,3 +378,39 @@ The proxy enforces a default maximum request body size (50 MB) to protect agains
 ### Admin API Protection
 
 Runtime profile management endpoints (switch, status) are secured with generated bearer tokens. See `docs/configuration.md` for token configuration.
+
+## Multi-User Architecture
+
+### Auth Layer (`internal/auth/`)
+
+API key management with SQLite-backed storage.
+
+**Key Design:**
+- Keys have `sk-ccrouter-` prefix
+- Only SHA-256 hashes stored in SQLite — raw keys returned once at creation
+- User identity propagated via Go context (`CtxKeyUser`, `CtxKeyRawToken`)
+- Per-group profile mapping: user's group determines which route profile is used
+
+**Key Components:**
+- `KeyStore` - SQLite CRUD for API keys and user groups
+- `AuthInterceptor` - Request interceptor that validates Bearer tokens and resolves user identity
+
+### QoS Layer (`internal/qos/`)
+
+Quality-of-service engine for multi-user traffic management.
+
+**Capacity Model:**
+- `globalMaxConcurrency` from config, default 100
+- Each group's guaranteed share: `ceil(globalMax × priorityWeight)`
+- Groups can borrow idle capacity from other groups
+- Total in-flight across ALL groups must not exceed global cap
+
+**Components:**
+- `QoSEngine` - Admission control with guaranteed shares and idle capacity borrowing
+- `WREDConfig` - Weighted Random Early Detection for queue overflow (linear drop probability)
+- `ProviderCapacityTracker` - AIMD-based provider capacity auto-detection from 429 responses
+
+**Provider AIMD Strategy:**
+- On 429: reduce concurrency limit (20% for single 429, 50% for burst)
+- On success: increment limit by +1 after every 10 consecutive successes (no recent 429s)
+- Initial limit: 50 concurrent requests per provider, floor: 1

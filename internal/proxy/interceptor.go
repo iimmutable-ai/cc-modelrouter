@@ -5,9 +5,28 @@ import (
 	"context"
 	"time"
 
+	"github.com/iimmutable/cc-modelrouter/internal/auth"
 	"github.com/iimmutable/cc-modelrouter/internal/logging"
 	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
 )
+
+// Context keys for multi-user request flow.
+type contextKey int
+
+const (
+	// CtxKeyRawToken carries the raw Bearer token from the Authorization header.
+	CtxKeyRawToken contextKey = iota
+	// CtxKeyUser carries the resolved UserInfo after authentication.
+	CtxKeyUser
+)
+
+// UserInfoFromContext extracts the UserInfo from context, if present.
+func UserInfoFromContext(ctx context.Context) *auth.UserInfo {
+	if u, ok := ctx.Value(CtxKeyUser).(*auth.UserInfo); ok {
+		return u
+	}
+	return nil
+}
 
 // RequestInterceptor intercepts and can modify requests before they are processed.
 type RequestInterceptor interface {

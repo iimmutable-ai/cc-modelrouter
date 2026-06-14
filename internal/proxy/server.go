@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable/cc-modelrouter/internal/qos"
 	"github.com/iimmutable/cc-modelrouter/internal/logging"
 )
 
@@ -119,6 +120,21 @@ func (s *Server) SetStreamingInterceptors(interceptors []StreamingResponseInterc
 // SetAdminToken sets the admin API token for runtime management.
 func (s *Server) SetAdminToken(token string) {
 	s.handler.SetAdminToken(token)
+}
+
+// SetMultiUserEnabled enables or disables multi-user authentication.
+func (s *Server) SetMultiUserEnabled(enabled bool) {
+	s.handler.SetMultiUserEnabled(enabled)
+}
+
+// SetAuthInterceptor sets the auth interceptor for multi-user mode.
+func (s *Server) SetAuthInterceptor(ai *AuthInterceptor) {
+	s.handler.SetAuthInterceptor(ai)
+}
+
+// SetQoSEngine sets the QoS engine for multi-user mode.
+func (s *Server) SetQoSEngine(engine *qos.QoSEngine) {
+	s.handler.qosEngine = engine
 }
 
 // SetActiveProfile sets the initial active profile for the handler and router.

@@ -200,6 +200,10 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.state.ShowModelDropdown = false
 					m.state.ModelDropdownCursor = 0
 				}
+				if m.focusedField > 2 {
+					m.state.ShowDropdown = false
+					m.state.ShowModelDropdown = false
+				}
 			}
 			if m.state.CurrentScreen == ScreenEditRoute {
 				m.state.ShowRouteNameDropdown = false
@@ -272,6 +276,8 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state.NewProviderTransformer = ""
 			m.state.NewProviderModels = ""
 			m.state.NewProviderAPIKey = ""
+			m.state.NewProviderDisableKeepAlives = false
+			m.state.NewProviderMaxRequestBodyBytes = ""
 			m.state.ProviderPreset = ""
 			m.state.ShowDropdown = true
 			m.state.DropdownCursor = 0
@@ -285,6 +291,26 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
 			return m.handleProvidersDelete()
+		}
+		if msg.String() == "t" || msg.String() == "T" {
+			providers := m.getProviderList()
+			if len(providers) == 0 {
+				m.state.ErrorMessage = "No providers configured to test"
+				return m, nil
+			}
+			selectedProvider := providers[m.state.ProviderCursor]
+			pc := m.state.Config.Providers[selectedProvider]
+			model := ""
+			if len(pc.Models) > 0 {
+				model = pc.Models[0]
+			}
+			m.state.TestProvider = selectedProvider
+			m.state.TestModel = model
+			m.state.TestStatus = "testing"
+			m.state.TestError = ""
+			m.state.TestLatency = 0
+			m.state.CurrentScreen = ScreenTestConnection
+			return m, m.testProviderConnectionAsync()
 		}
 	case ScreenRoutes:
 		// Handle profile edit modal
@@ -527,6 +553,16 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 			if port, err := strconv.Atoi(portStr); err == nil && port >= 1024 && port <= 65535 {
 				m.state.Config.Server.Host = host
 				m.state.Config.Server.Port = port
+				m.state.HasChanges = true
+			}
+		}
+		if retries, err := strconv.Atoi(strings.TrimSpace(m.state.ServerMaxRetries)); err == nil && retries >= 0 {
+			m.state.Config.Router.MaxRetries = retries
+			m.state.HasChanges = true
+		}
+		if delay := strings.TrimSpace(m.state.ServerRetryDelay); delay != "" {
+			if _, err := time.ParseDuration(delay); err == nil {
+				m.state.Config.Router.RetryDelay = delay
 				m.state.HasChanges = true
 			}
 		}
@@ -950,6 +986,8 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 	case 2: // Server
 		m.state.ServerHost = m.state.Config.Server.Host
 		m.state.ServerPort = strconv.Itoa(m.state.Config.Server.Port)
+		m.state.ServerMaxRetries = strconv.Itoa(m.state.Config.Router.MaxRetries)
+		m.state.ServerRetryDelay = m.state.Config.Router.RetryDelay
 		m.state.PortStatus = ""
 		m.state.CurrentScreen = ScreenServer
 		return m, m.checkPortAvailability()
@@ -1014,6 +1052,10 @@ func (m *WizardModel) handleProvidersEnter() (tea.Model, tea.Cmd) {
 			m.state.NewProviderBaseURL = providerCfg.BaseURL
 			m.state.NewProviderTransformer = providerCfg.Transformer
 			m.state.NewProviderModels = strings.Join(providerCfg.Models, "\n")
+			m.state.NewProviderDisableKeepAlives = providerCfg.DisableKeepAlives
+			if providerCfg.MaxRequestBodyBytes > 0 {
+				m.state.NewProviderMaxRequestBodyBytes = strconv.FormatInt(providerCfg.MaxRequestBodyBytes, 10)
+			}
 			expanded := os.ExpandEnv(providerCfg.APIKey)
 			if expanded == "" && strings.Contains(providerCfg.APIKey, "${") {
 				// Env var not set — show the placeholder so user knows which var is needed
@@ -1246,6 +1288,20 @@ func (m *WizardModel) checkPortAvailability() tea.Cmd {
 	}
 }
 
+func (m *WizardModel) testProviderConnectionAsync() tea.Cmd {
+	providerName := m.state.TestProvider
+	model := m.state.TestModel
+	pc := m.state.Config.Providers[providerName]
+	return func() tea.Msg {
+		result := TestProviderConnection(providerName, pc, model)
+		return TestConnectionResultMsg{
+			Success: result.Success,
+			Latency: result.Latency,
+			Error:   result.Error,
+		}
+	}
+}
+
 func (m *WizardModel) handleServerSave() (tea.Model, tea.Cmd) {
 	host := strings.TrimSpace(m.state.ServerHost)
 	portStr := strings.TrimSpace(m.state.ServerPort)
@@ -1263,6 +1319,17 @@ func (m *WizardModel) handleServerSave() (tea.Model, tea.Cmd) {
 
 	m.state.Config.Server.Host = host
 	m.state.Config.Server.Port = port
+
+	// Save retry settings
+	if retries, err := strconv.Atoi(strings.TrimSpace(m.state.ServerMaxRetries)); err == nil && retries >= 0 {
+		m.state.Config.Router.MaxRetries = retries
+	}
+	if delay := strings.TrimSpace(m.state.ServerRetryDelay); delay != "" {
+		if _, err := time.ParseDuration(delay); err == nil {
+			m.state.Config.Router.RetryDelay = delay
+		}
+	}
+
 	m.state.HasChanges = true
 	m.state.CurrentScreen = ScreenMainMenu
 	m.state.ErrorMessage = ""
@@ -1336,13 +1403,20 @@ func (m *WizardModel) handleAddProvider2Enter() (tea.Model, tea.Cmd) {
 	// Generate env var name
 	envVarName := GenerateEnvVarName(providerName)
 
-	// Create provider config
-	m.state.Config.Providers[providerName] = config.ProviderConfig{
+	// Create provider config (preserve advanced settings if editing)
+	pc := config.ProviderConfig{
 		APIKey:      "${" + envVarName + "}",
 		BaseURL:     strings.TrimSpace(m.state.NewProviderBaseURL),
 		Transformer: strings.TrimSpace(m.state.NewProviderTransformer),
 		Models:      strings.Split(strings.TrimSpace(m.state.NewProviderModels), "\n"),
 	}
+	if m.state.NewProviderDisableKeepAlives {
+		pc.DisableKeepAlives = true
+	}
+	if bytes, err := strconv.ParseInt(strings.TrimSpace(m.state.NewProviderMaxRequestBodyBytes), 10, 64); err == nil && bytes > 0 {
+		pc.MaxRequestBodyBytes = bytes
+	}
+	m.state.Config.Providers[providerName] = pc
 
 	m.state.HasChanges = true
 
@@ -1498,6 +1572,22 @@ func (m *WizardModel) handleFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.state.ShowModelDropdown = true
 				m.state.ModelDropdownCursor = 0
 			}
+		case 3: // DisableKeepAlives toggle
+			if msg.String() == " " {
+				m.state.NewProviderDisableKeepAlives = !m.state.NewProviderDisableKeepAlives
+			}
+		case 4: // MaxRequestBodyBytes
+			if msg.String() == "backspace" && len(m.state.NewProviderMaxRequestBodyBytes) > 0 {
+				m.state.NewProviderMaxRequestBodyBytes = m.state.NewProviderMaxRequestBodyBytes[:len(m.state.NewProviderMaxRequestBodyBytes)-1]
+			} else if msg.Paste {
+				for _, r := range msg.Runes {
+					if r >= '0' && r <= '9' {
+						m.state.NewProviderMaxRequestBodyBytes += string(r)
+					}
+				}
+			} else if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
+				m.state.NewProviderMaxRequestBodyBytes += msg.String()
+			}
 		}
 
 	case ScreenAddProvider2:
@@ -1535,6 +1625,26 @@ func (m *WizardModel) handleServerInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state.ServerPort += msg.String()
 		}
 		return m, m.checkPortAvailability()
+	case 2: // MaxRetries
+		if msg.String() == "backspace" && len(m.state.ServerMaxRetries) > 0 {
+			m.state.ServerMaxRetries = m.state.ServerMaxRetries[:len(m.state.ServerMaxRetries)-1]
+		} else if msg.Paste {
+			for _, r := range msg.Runes {
+				if r >= '0' && r <= '9' {
+					m.state.ServerMaxRetries += string(r)
+				}
+			}
+		} else if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
+			m.state.ServerMaxRetries += msg.String()
+		}
+	case 3: // RetryDelay
+		if msg.String() == "backspace" && len(m.state.ServerRetryDelay) > 0 {
+			m.state.ServerRetryDelay = m.state.ServerRetryDelay[:len(m.state.ServerRetryDelay)-1]
+		} else if msg.Paste {
+			m.state.ServerRetryDelay += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerRetryDelay += msg.String()
+		}
 	}
 	return m, nil
 }
@@ -1547,6 +1657,17 @@ func (m *WizardModel) handleLoggingInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case 1: // Level - dropdown handled by handleNavigation/handleEnter
 	case 2: // Destination - dropdown handled by handleNavigation/handleEnter
+	case 3: // File path
+		if !m.state.LoggingEnabled {
+			return m, nil
+		}
+		if msg.String() == "backspace" && len(m.state.LoggingFilePath) > 0 {
+			m.state.LoggingFilePath = m.state.LoggingFilePath[:len(m.state.LoggingFilePath)-1]
+		} else if msg.Paste {
+			m.state.LoggingFilePath += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.LoggingFilePath += msg.String()
+		}
 	}
 	return m, nil
 }
@@ -1599,13 +1720,13 @@ func (m *WizardModel) cycleLoggingDestination(delta int) {
 func (m *WizardModel) getMaxFields() int {
 	switch m.state.CurrentScreen {
 	case ScreenAddProvider1:
-		return 3
+		return 5
 	case ScreenAddProvider2:
 		return 1
 	case ScreenServer:
-		return 2
+		return 4
 	case ScreenLogging:
-		return 3
+		return 4
 	case ScreenEditRoute:
 		return 2
 	case ScreenCreateProfile:
@@ -2028,6 +2149,8 @@ func (m *WizardModel) View() string {
 		return m.renderLogging()
 	case ScreenViewConfig:
 		return m.renderViewConfig()
+	case ScreenTestConnection:
+		return m.renderTestConnection()
 	default:
 		return m.renderMainMenu()
 	}
@@ -2243,6 +2366,41 @@ func (m *WizardModel) renderProviders() string {
 	return m.renderWithModal(mainBox)
 }
 
+// renderTestConnection renders the provider connection test screen.
+func (m *WizardModel) renderTestConnection() string {
+	title := SectionHeaderStyle.Width(m.contentWidth()).Render("Test Connection")
+	var lines []string
+
+	lines = append(lines, m.blankLine())
+	lines = append(lines, MenuItemDimmedStyle.Width(m.contentWidth()).Render("Provider: "+m.state.TestProvider))
+	lines = append(lines, MenuItemDimmedStyle.Width(m.contentWidth()).Render("Model: "+m.state.TestModel))
+	lines = append(lines, m.blankLine())
+
+	switch m.state.TestStatus {
+	case "testing":
+		lines = append(lines, HelpTextStyle.Width(m.contentWidth()).Render("Testing connection..."))
+	case "success":
+		latency := m.state.TestLatency * 1000
+		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render("Connection successful!"))
+		lines = append(lines, MenuItemDimmedStyle.Width(m.contentWidth()).Render(fmt.Sprintf("Latency: %.0fms", latency)))
+	case "error":
+		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render("Connection failed!"))
+		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render(m.state.TestError))
+	}
+
+	lines = append(lines, m.blankLine())
+	lines = append(lines, HelpTextStyle.Width(m.contentWidth()).Render("[Esc] Back to Providers"))
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.fullWidth(title),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+	)
+
+	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
+	return mainBox
+}
+
 // getPresetMatches returns preset names matching the current provider name input.
 func (m *WizardModel) getPresetMatches() []string {
 	input := strings.ToLower(m.state.NewProviderName)
@@ -2429,6 +2587,39 @@ func (m *WizardModel) renderAddProvider1() string {
 			content = lipgloss.JoinVertical(lipgloss.Left, content, dropdown)
 		}
 	}
+
+	// Advanced settings
+	keepAliveLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Disable Keep-Alive (connection issues):")
+	keepAliveStatus := "off"
+	if m.state.NewProviderDisableKeepAlives {
+		keepAliveStatus = "on"
+	}
+	keepAliveInput := keepAliveStatus
+	if m.focusedField == 3 {
+		keepAliveInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render("[Space] " + keepAliveStatus)
+	} else {
+		keepAliveInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(keepAliveStatus)
+	}
+
+	maxBodyLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Max Request Body (bytes, 0=unlimited):")
+	maxBodyInput := m.state.NewProviderMaxRequestBodyBytes
+	if m.state.NewProviderMaxRequestBodyBytes == "" {
+		maxBodyInput = "0"
+	}
+	if m.focusedField == 4 {
+		maxBodyInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(maxBodyInput + "_")
+	} else {
+		maxBodyInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(maxBodyInput)
+	}
+
+	content = lipgloss.JoinVertical(
+		lipgloss.Left,
+		content,
+		m.blankLine(),
+		keepAliveLabel, m.fullWidth(keepAliveInput),
+		m.blankLine(),
+		maxBodyLabel, m.fullWidth(maxBodyInput),
+	)
 
 	content = lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -3463,7 +3654,23 @@ func (m *WizardModel) renderServer() string {
 		portInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(portInput)
 	}
 
-	note := MenuItemDimmedStyle.Render("Note: Must be between 1024-65535")
+	retriesLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Max Retries (failover):")
+	retriesInput := m.state.ServerMaxRetries
+	if m.focusedField == 2 {
+		retriesInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(retriesInput + "_")
+	} else {
+		retriesInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(retriesInput)
+	}
+
+	retryDelayLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Retry Delay (e.g. 500ms, 1s):")
+	retryDelayInput := m.state.ServerRetryDelay
+	if m.focusedField == 3 {
+		retryDelayInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(retryDelayInput + "_")
+	} else {
+		retryDelayInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(retryDelayInput)
+	}
+
+	note := MenuItemDimmedStyle.Render("Note: Port must be 1024-65535 · Retry delay uses Go duration format")
 	if m.state.PortTesting {
 		note = lipgloss.JoinHorizontal(lipgloss.Left, note, "  ", StatusPendingStyle.Render("Testing port..."))
 	} else if m.state.PortStatus != "" {
@@ -3483,6 +3690,10 @@ func (m *WizardModel) renderServer() string {
 		hostLabel, m.fullWidth(hostInput),
 		m.blankLine(),
 		portLabel, m.fullWidth(portInput),
+		m.blankLine(),
+		retriesLabel, m.fullWidth(retriesInput),
+		m.blankLine(),
+		retryDelayLabel, m.fullWidth(retryDelayInput),
 		m.blankLine(),
 		note,
 		m.blankLine(),
@@ -3544,14 +3755,6 @@ func (m *WizardModel) renderLogging() string {
 		destValue = InputFieldStyle.Width(m.inputFieldWidth()).Render(destValue)
 	}
 
-	// File path display — show both log locations
-	fileLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Log Files:")
-	defaultLogPath := m.state.LoggingFilePath
-	if defaultLogPath == "" {
-		defaultLogPath = "~/.cc-modelrouter/router.log"
-	}
-	instanceLogPath := "~/.cc-modelrouter/logs/inst_<timestamp>.log"
-
 	// Build base content
 	checkboxRow := lipgloss.JoinHorizontal(lipgloss.Left, enabledCheckbox, " Enable Logging")
 	if checkboxFocused {
@@ -3612,18 +3815,27 @@ func (m *WizardModel) renderLogging() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, content, dropdown)
 	}
 
-	if m.state.LoggingDestination == "file" {
-		pathStyle := MenuItemDimmedStyle.Width(m.contentWidth())
+	if m.state.LoggingDestination == "file" || m.focusedField == 3 {
+		filePathValue := m.state.LoggingFilePath
+		if filePathValue == "" {
+			filePathValue = "0 (auto-generate)"
+		}
+		var filePathInput string
 		if loggingDisabled {
-			pathStyle = MenuItemDimmedStyle.Width(m.contentWidth()).Foreground(SecondaryText)
+			filePathInput = InputFieldDisabledStyle.Width(m.inputFieldWidth()).Render(filePathValue)
+		} else if m.focusedField == 3 {
+			filePathInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(filePathValue + "_")
+		} else {
+			filePathInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(filePathValue)
 		}
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
 			m.blankLine(),
-			fileLabel,
-			pathStyle.Render("  Default:   " + defaultLogPath),
-			pathStyle.Render("  Instance:  " + instanceLogPath),
+			MenuItemDimmedStyle.Width(m.contentWidth()).Render("File Path (empty = auto):"),
+			m.fullWidth(filePathInput),
+			m.blankLine(),
+			MenuItemDimmedStyle.Width(m.contentWidth()).Render("Instance logs: ~/.cc-modelrouter/logs/inst_<timestamp>.log"),
 		)
 	}
 

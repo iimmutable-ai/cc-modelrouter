@@ -767,7 +767,7 @@ func TestHandleMessages_UsageTracking(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if len(tracker.records) != 1 {
 		t.Errorf("expected 1 usage record, got %d", len(tracker.records))
@@ -855,7 +855,7 @@ func TestHandleMessages_FailoverFallbackCount(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -904,7 +904,7 @@ func TestHandleMessages_AllProvidersFailed(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("expected status 502, got %d", w.Code)
@@ -1508,7 +1508,7 @@ func TestHandleStreaming_IsolatedContexts(t *testing.T) {
 	}, req, "test", []config.RouteTarget{
 		{Provider: "provider1", Model: "model1"},
 		{Provider: "provider2", Model: "model2"},
-	})
+	}, nil)
 
 	// Verify both providers were called
 	if !provider1Called {
@@ -1603,7 +1603,7 @@ func TestHandleMessages_UsageTrackingFallback(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	// Verify request succeeded
 	if w.Code != http.StatusOK {
@@ -1691,7 +1691,7 @@ func TestHandleMessages_UsageTrackingWithActualData(t *testing.T) {
 
 	anthropicReq := &anthropic.Request{}
 	json.Unmarshal([]byte(reqBody), anthropicReq)
-	handler.handleMessages(w, req, anthropicReq)
+	handler.handleMessages(w, req, anthropicReq, nil)
 
 	if len(tracker.records) != 1 {
 		t.Fatalf("expected 1 usage record, got %d", len(tracker.records))

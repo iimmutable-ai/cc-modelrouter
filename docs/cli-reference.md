@@ -448,6 +448,200 @@ ccrouter logs -n 50 inst_20250216_143022
 
 ---
 
+### ccrouter keys
+
+Manage API keys for multi-user mode.
+
+```bash
+ccrouter keys <subcommand> [flags]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `create` | Create a new API key |
+| `list` | List all API keys |
+| `revoke <id>` | Revoke an API key |
+
+Keys are stored in `~/.cc-modelrouter/usage.db`. A running server is not required.
+
+#### ccrouter keys create
+
+Create a new API key for a user. The full key is displayed once at creation time and cannot be retrieved later.
+
+```bash
+ccrouter keys create [flags]
+```
+
+**Flags:**
+```
+      --name string    Human-readable name for the key (required)
+      --group string   Group to assign the key to (required)
+```
+
+**Description:**
+- Generates a key with `sk-ccrouter-` prefix
+- SHA-256 hash stored in SQLite (raw key never persisted)
+- Returns the full key — save it immediately
+
+**Examples:**
+```bash
+# Create a key for a developer
+ccrouter keys create --name alice --group developers
+
+# Create a key for an intern
+ccrouter keys create --name "bob" --group interns
+```
+
+#### ccrouter keys list
+
+List all API keys with metadata.
+
+```bash
+ccrouter keys list
+```
+
+**Output:**
+```
+ID    PREFIX          NAME     GROUP        ACTIVE  LAST USED
+1     sk-cc-a1b2...   alice    developers   yes     2026-06-09 14:30
+2     sk-cc-c3d4...   bob      interns      yes     (never)
+```
+
+#### ccrouter keys revoke
+
+Revoke an API key by its database ID.
+
+```bash
+ccrouter keys revoke <id>
+```
+
+**Arguments:**
+```
+  id   Database ID of the key to revoke (from `ccrouter keys list`)
+```
+
+**Examples:**
+```bash
+ccrouter keys revoke 2
+```
+
+---
+
+### ccrouter groups
+
+Manage user groups for multi-user mode. Groups map API keys to routing profiles with QoS settings.
+
+```bash
+ccrouter groups <subcommand> [flags]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all groups with member counts |
+| `create` | Create a new group |
+| `update <id>` | Update group settings |
+| `delete <id>` | Delete a group |
+
+Groups are stored in `~/.cc-modelrouter/usage.db`. A running server is not required.
+
+#### ccrouter groups create
+
+Create a new user group with routing profile and QoS settings.
+
+```bash
+ccrouter groups create [flags]
+```
+
+**Flags:**
+```
+      --name string          Group name (required)
+      --profile string       Routing profile to use (default: "")
+      --priority float       Priority weight 0.0-1.0 (required)
+      --max-concurrency int  Max concurrent requests for this group (0 = unlimited)
+```
+
+**Description:**
+- `priority` determines guaranteed capacity share: `ceil(globalMax × priority)`
+- Groups can borrow idle capacity from other groups when under-utilized
+- `profile` maps to existing route profiles in config
+
+**Examples:**
+```bash
+# Create a developers group with 70% priority
+ccrouter groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
+
+# Create an interns group with 30% priority
+ccrouter groups create --name interns --profile cost-opt --priority 0.3 --max-concurrency 10
+```
+
+#### ccrouter groups list
+
+List all groups with member counts and settings.
+
+```bash
+ccrouter groups list
+```
+
+**Output:**
+```
+ID    NAME         PROFILE     PRIORITY  MAX CONC  MEMBERS
+1     developers   standard    0.70      50        3
+2     interns      cost-opt    0.30      10        1
+```
+
+#### ccrouter groups update
+
+Update an existing group's settings.
+
+```bash
+ccrouter groups update <id> [flags]
+```
+
+**Arguments:**
+```
+  id   Database ID of the group (from `ccrouter groups list`)
+```
+
+**Flags:**
+```
+      --profile string       New routing profile
+      --priority float      New priority weight
+      --max-concurrency int New max concurrency
+```
+
+**Examples:**
+```bash
+# Update group priority
+ccrouter groups update 1 --priority 0.8
+
+# Change routing profile
+ccrouter groups update 2 --profile standard
+```
+
+#### ccrouter groups delete
+
+Delete a group. Fails if any API keys reference the group.
+
+```bash
+ccrouter groups delete <id>
+```
+
+**Arguments:**
+```
+  id   Database ID of the group (from `ccrouter groups list`)
+```
+
+**Examples:**
+```bash
+ccrouter groups delete 2
+```
+
+---
+
 ### ccrouter monitor
 
 Live usage monitor with terminal UI.

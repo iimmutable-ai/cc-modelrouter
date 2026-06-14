@@ -494,6 +494,103 @@ export CCROUTER_GEMINI_API_KEY="AIza..."
 export CCROUTER_BIGMODEL_API_KEY="..."
 ```
 
+## Multi-User Configuration
+
+Multi-user mode enables team sharing of a single router instance with API key authentication, per-group routing profiles, and QoS with priority queuing.
+
+### Enabling Multi-User
+
+Add the `multiUser` section to your config:
+
+```json
+{
+  "multiUser": {
+    "enabled": true,
+    "globalMaxConcurrency": 100,
+    "groups": [
+      {
+        "name": "developers",
+        "profile": "standard",
+        "priorityWeight": 0.7,
+        "maxConcurrency": 50
+      },
+      {
+        "name": "interns",
+        "profile": "cost-opt",
+        "priorityWeight": 0.3,
+        "maxConcurrency": 10
+      }
+    ]
+  }
+}
+```
+
+When `multiUser.enabled` is `false` or absent, the server operates in single-user mode — no authentication, no QoS, no interceptors.
+
+### MultiUser Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable multi-user mode |
+| `globalMaxConcurrency` | int | 100 | Maximum concurrent requests across all groups |
+| `wredMinDepth` | float | 0.5 | WRED drop probability starts at this queue depth fraction |
+| `wredMaxDepth` | float | 0.9 | WRED drop probability reaches 100% at this queue depth fraction |
+| `groups` | []GroupConfig | [] | User group definitions |
+
+### GroupConfig Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique group name |
+| `profile` | string | No | Route profile to use (empty = active profile) |
+| `priorityWeight` | float | Yes | Priority weight 0.0-1.0 (guaranteed share = `ceil(globalMax × weight)`) |
+| `maxConcurrency` | int | No | Max concurrent requests for this group (0 = unlimited) |
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **API Keys** | `sk-ccrouter-...` bearer tokens, set as `ANTHROPIC_API_KEY` in Claude Code |
+| **User Groups** | Map keys to routing profiles with QoS settings |
+| **Guaranteed Shares** | `ceil(globalMax × priorityWeight)` — guaranteed capacity per group |
+| **Idle Borrowing** | Groups can borrow unused capacity from other groups |
+| **WRED** | Weighted Random Early Detection drops requests when queue is full |
+| **Provider AIMD** | Auto-detects 429s and adjusts concurrency limits (additive increase, multiplicative decrease) |
+
+### Managing Keys and Groups
+
+API keys and groups are stored in SQLite (`~/.cc-modelrouter/usage.db`), not in config.json. Use the CLI to manage them:
+
+```bash
+# Create a group
+ccrouter groups create --name developers --profile standard --priority 0.7 --max-concurrency 50
+
+# Create an API key (save the key — it's shown only once)
+ccrouter keys create --name alice --group developers
+
+# List keys and groups
+ccrouter keys list
+ccrouter groups list
+
+# Revoke a key
+ccrouter keys revoke <id>
+
+# Delete a group (fails if keys reference it)
+ccrouter groups delete <id>
+```
+
+### Using Multi-User Mode
+
+1. Configure `multiUser` in config with at least one group
+2. Start the server: `ccrouter start`
+3. Create API keys: `ccrouter keys create --name <name> --group <group>`
+4. Configure Claude Code to use the router with the API key:
+   ```bash
+   export ANTHROPIC_BASE_URL=http://localhost:8081
+   export ANTHROPIC_API_KEY=sk-ccrouter-...
+   claude
+   ```
+
 ## Complete Example
 
 ```json

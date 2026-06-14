@@ -31,9 +31,27 @@ type Config struct {
 	Providers map[string]ProviderConfig `json:"providers"`
 	Router    RouterConfig              `json:"router"`
 	Logging   LoggingConfig             `json:"logging,omitempty"`
+	MultiUser MultiUserConfig           `json:"multiUser,omitempty"`
 	// Profiles is kept at Config level for backward compatibility when loading old config files.
 	// It is migrated to Router.Profiles during loading and always nil after that.
 	Profiles map[string]ProfileConfig `json:"profiles,omitempty"` // Legacy location - migrated to Router.Profiles
+}
+
+// MultiUserConfig controls multi-user authentication and QoS.
+type MultiUserConfig struct {
+	Enabled        bool          `json:"enabled,omitempty"`
+	GlobalMaxConc  int           `json:"globalMaxConcurrency,omitempty"` // 0 = auto (100)
+	WREDMinDepth   float64       `json:"wredMinDepth,omitempty"`          // default 0.5
+	WREDMaxDepth   float64       `json:"wredMaxDepth,omitempty"`          // default 0.9
+	Groups         []GroupConfig `json:"groups,omitempty"`
+}
+
+// GroupConfig defines a user group with profile mapping and QoS settings.
+type GroupConfig struct {
+	Name           string  `json:"name"`
+	Profile        string  `json:"profile"`
+	PriorityWeight float64 `json:"priorityWeight"`
+	MaxConcurrency int     `json:"maxConcurrency"`
 }
 
 // ProfileConfig represents a named route profile.
