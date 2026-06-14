@@ -322,6 +322,16 @@ func GetScreenTitle(screen Screen) string {
 		return "Current Configuration"
 	case ScreenTestConnection:
 		return "Test Connection"
+	case ScreenAPIKeys:
+		return "API Keys"
+	case ScreenCreateAPIKey:
+		return "Create API Key"
+	case ScreenMultiUser:
+		return "Multi-User Settings"
+	case ScreenGroups:
+		return "User Groups"
+	case ScreenCreateGroup:
+		return "Create Group"
 	default:
 		return "Configuration Wizard"
 	}

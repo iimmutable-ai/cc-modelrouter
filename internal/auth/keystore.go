@@ -12,13 +12,11 @@ import (
 	"time"
 )
 
-// KeyInfo contains information about a validated API key.
+// KeyInfo contains information about an API key.
 type KeyInfo struct {
 	KeyID     int64
 	KeyPrefix string
-	Name      string
-	GroupID   int64
-	GroupName string
+	UserName  string
 	IsActive  bool
 	CreatedAt time.Time
 	LastUsed  *time.Time
@@ -35,13 +33,21 @@ type GroupInfo struct {
 }
 
 // UserInfo is the resolved user identity stored in request context.
+// GroupName and Profile are resolved by the caller via GetUserGroup.
 type UserInfo struct {
 	KeyID     int64
 	KeyPrefix string
-	Name      string
-	GroupID   int64
+	UserName  string
 	GroupName string
 	Profile   string
+}
+
+// MultiUserSettings holds the singleton multi-user settings row.
+type MultiUserSettings struct {
+	Enabled       bool
+	GlobalMaxConc int
+	WREDMinDepth  float64
+	WREDMaxDepth  float64
 }
 
 // KeyPrefixLen is the number of characters shown in key prefixes.
@@ -55,7 +61,7 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-// KeyStore manages API keys and user groups in SQLite.
+// KeyStore manages API keys, user groups, and multi-user settings in SQLite.
 type KeyStore struct {
 	db    *sql.DB
 	mu    sync.RWMutex
@@ -63,7 +69,8 @@ type KeyStore struct {
 }
 
 // NewKeyStore creates a new KeyStore backed by the given database.
-// The database must already have the api_keys and user_groups tables created.
+// The database must already have the api_keys, user_groups, multi_user_settings,
+// and group_members tables created.
 func NewKeyStore(db *sql.DB) *KeyStore {
 	return &KeyStore{
 		db:    db,
@@ -89,6 +96,34 @@ func GenerateKey() (raw string, hash string, prefix string, err error) {
 	prefix = raw[:KeyPrefixLen]
 	return raw, hash, prefix, nil
 }
+
+// --- Settings CRUD ---
+
+// GetSettings reads the singleton multi-user settings from SQLite.
+func (ks *KeyStore) GetSettings() (*MultiUserSettings, error) {
+	var s MultiUserSettings
+	err := ks.db.QueryRow(
+		"SELECT enabled, global_max_conc, wred_min_depth, wred_max_depth FROM multi_user_settings WHERE id = 1",
+	).Scan(&s.Enabled, &s.GlobalMaxConc, &s.WREDMinDepth, &s.WREDMaxDepth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read multi-user settings: %w", err)
+	}
+	return &s, nil
+}
+
+// UpdateSettings writes the multi-user settings to SQLite.
+func (ks *KeyStore) UpdateSettings(s *MultiUserSettings) error {
+	_, err := ks.db.Exec(
+		"UPDATE multi_user_settings SET enabled = ?, global_max_conc = ?, wred_min_depth = ?, wred_max_depth = ? WHERE id = 1",
+		s.Enabled, s.GlobalMaxConc, s.WREDMinDepth, s.WREDMaxDepth,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update multi-user settings: %w", err)
+	}
+	return nil
+}
+
+// --- Group CRUD ---
 
 // CreateGroup creates a new user group. Returns the group ID.
 func (ks *KeyStore) CreateGroup(name, profile string, priorityWeight float64, maxConcurrency int) (int64, error) {
@@ -119,6 +154,37 @@ func (ks *KeyStore) GetGroupByName(name string) (*GroupInfo, error) {
 		return nil, fmt.Errorf("failed to get group: %w", err)
 	}
 	return &g, nil
+}
+
+// GroupInfoWithCount extends GroupInfo with a pre-computed member count.
+type GroupInfoWithCount struct {
+	GroupInfo
+	MemberCount int
+}
+
+// ListGroupsWithMemberCounts returns all groups with their member counts in a single query.
+func (ks *KeyStore) ListGroupsWithMemberCounts() ([]*GroupInfoWithCount, error) {
+	rows, err := ks.db.Query(`
+		SELECT ug.id, ug.name, ug.profile, ug.priority_weight, ug.max_concurrency, ug.created_at,
+		       COALESCE(gm.cnt, 0)
+		FROM user_groups ug
+		LEFT JOIN (SELECT group_id, COUNT(*) as cnt FROM group_members GROUP BY group_id) gm
+		  ON ug.id = gm.group_id
+		ORDER BY ug.name`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list groups with counts: %w", err)
+	}
+	defer rows.Close()
+
+	var groups []*GroupInfoWithCount
+	for rows.Next() {
+		var g GroupInfoWithCount
+		if err := rows.Scan(&g.ID, &g.Name, &g.Profile, &g.PriorityWeight, &g.MaxConcurrency, &g.CreatedAt, &g.MemberCount); err != nil {
+			return nil, fmt.Errorf("failed to scan group with count: %w", err)
+		}
+		groups = append(groups, &g)
+	}
+	return groups, rows.Err()
 }
 
 // ListGroups returns all groups.
@@ -159,15 +225,15 @@ func (ks *KeyStore) UpdateGroup(id int64, profile string, priorityWeight float64
 	return nil
 }
 
-// DeleteGroup deletes a group. Returns error if keys still reference it.
+// DeleteGroup deletes a group. Returns error if members still reference it.
 func (ks *KeyStore) DeleteGroup(id int64) error {
 	var count int
-	err := ks.db.QueryRow("SELECT COUNT(*) FROM api_keys WHERE group_id = ? AND is_active = 1", id).Scan(&count)
+	err := ks.db.QueryRow("SELECT COUNT(*) FROM group_members WHERE group_id = ?", id).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("failed to check group references: %w", err)
 	}
 	if count > 0 {
-		return fmt.Errorf("cannot delete group: %d active API keys reference it", count)
+		return fmt.Errorf("cannot delete group: %d members still assigned to it", count)
 	}
 
 	result, err := ks.db.Exec("DELETE FROM user_groups WHERE id = ?", id)
@@ -181,17 +247,113 @@ func (ks *KeyStore) DeleteGroup(id int64) error {
 	return nil
 }
 
-// CreateKey creates a new API key for a user in the given group.
-// Returns the full raw key (only shown once) and the key ID.
-func (ks *KeyStore) CreateKey(name string, groupID int64) (rawKey string, keyID int64, err error) {
+// --- Member CRUD ---
+
+// AddGroupMember adds a user to a group.
+func (ks *KeyStore) AddGroupMember(groupID int64, userName string) error {
+	_, err := ks.db.Exec(
+		"INSERT OR IGNORE INTO group_members (group_id, user_name) VALUES (?, ?)",
+		groupID, userName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to add group member: %w", err)
+	}
+	return nil
+}
+
+// RemoveGroupMember removes a user from a group.
+func (ks *KeyStore) RemoveGroupMember(groupID int64, userName string) error {
+	_, err := ks.db.Exec(
+		"DELETE FROM group_members WHERE group_id = ? AND user_name = ?",
+		groupID, userName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to remove group member: %w", err)
+	}
+	return nil
+}
+
+// ListGroupMembers returns all user names in a group.
+func (ks *KeyStore) ListGroupMembers(groupID int64) ([]string, error) {
+	rows, err := ks.db.Query(
+		"SELECT user_name FROM group_members WHERE group_id = ? ORDER BY user_name",
+		groupID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list group members: %w", err)
+	}
+	defer rows.Close()
+
+	var members []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("failed to scan member: %w", err)
+		}
+		members = append(members, name)
+	}
+	return members, rows.Err()
+}
+
+// GetUserGroup returns the group info for a user (via group_members join).
+func (ks *KeyStore) GetUserGroup(userName string) (*GroupInfo, error) {
+	var g GroupInfo
+	err := ks.db.QueryRow(`
+		SELECT ug.id, ug.name, ug.profile, ug.priority_weight, ug.max_concurrency, ug.created_at
+		FROM group_members gm
+		JOIN user_groups ug ON gm.group_id = ug.id
+		WHERE gm.user_name = ?`,
+		userName,
+	).Scan(&g.ID, &g.Name, &g.Profile, &g.PriorityWeight, &g.MaxConcurrency, &g.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user group: %w", err)
+	}
+	return &g, nil
+}
+
+// GetUserProfile returns the profile for a user by looking up their group.
+func (ks *KeyStore) GetUserProfile(userName string) (string, error) {
+	g, err := ks.GetUserGroup(userName)
+	if err != nil {
+		return "", err
+	}
+	if g == nil {
+		return "", nil
+	}
+	return g.Profile, nil
+}
+
+// GetGroupMemberCount returns the number of members in a group.
+func (ks *KeyStore) GetGroupMemberCount(groupID int64) (int, error) {
+	var count int
+	err := ks.db.QueryRow("SELECT COUNT(*) FROM group_members WHERE group_id = ?", groupID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// --- Key CRUD ---
+
+// CreateKey creates a new API key for a user. Returns the full raw key (only shown once) and the key ID.
+// The raw key is encrypted and stored alongside the hash for later retrieval.
+func (ks *KeyStore) CreateKey(userName string) (rawKey string, keyID int64, err error) {
 	rawKey, keyHash, prefix, err := GenerateKey()
 	if err != nil {
 		return "", 0, err
 	}
 
+	encrypted, err := Encrypt(rawKey)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to encrypt key: %w", err)
+	}
+
 	result, err := ks.db.Exec(
-		"INSERT INTO api_keys (key_hash, key_prefix, name, group_id) VALUES (?, ?, ?, ?)",
-		keyHash, prefix, name, groupID,
+		"INSERT INTO api_keys (key_hash, key_prefix, name, user_name, group_id, key_encrypted) VALUES (?, ?, ?, ?, 0, ?)",
+		keyHash, prefix, userName, userName, encrypted,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -207,8 +369,49 @@ func (ks *KeyStore) CreateKey(name string, groupID int64) (rawKey string, keyID 
 	return rawKey, keyID, nil
 }
 
+// GetRawKey retrieves and decrypts the raw API key by its ID.
+func (ks *KeyStore) GetRawKey(id int64) (string, error) {
+	var encrypted string
+	err := ks.db.QueryRow("SELECT key_encrypted FROM api_keys WHERE id = ?", id).Scan(&encrypted)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("key not found: %d", id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get key: %w", err)
+	}
+	if encrypted == "" {
+		return "", fmt.Errorf("key %d has no encrypted data (created before encryption was enabled)", id)
+	}
+	return Decrypt(encrypted)
+}
+
+// GetRawKeyByUserName finds the first active key by user name and returns its decrypted raw key and ID.
+func (ks *KeyStore) GetRawKeyByUserName(userName string) (string, int64, error) {
+	var id int64
+	var encrypted string
+	err := ks.db.QueryRow(
+		"SELECT id, key_encrypted FROM api_keys WHERE user_name = ? AND is_active = 1 LIMIT 1",
+		userName,
+	).Scan(&id, &encrypted)
+	if err == sql.ErrNoRows {
+		return "", 0, fmt.Errorf("no active key found for user: %s", userName)
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to look up key: %w", err)
+	}
+	if encrypted == "" {
+		return "", 0, fmt.Errorf("key for '%s' has no encrypted data (created before encryption was enabled)", userName)
+	}
+	raw, err := Decrypt(encrypted)
+	if err != nil {
+		return "", 0, err
+	}
+	return raw, id, nil
+}
+
 // ValidateKey validates a raw API key and returns the associated user info.
 // Uses a short-lived in-memory cache to avoid SQLite queries on every request.
+// GroupName and Profile are resolved from group_members.
 func (ks *KeyStore) ValidateKey(rawKey string) (*UserInfo, error) {
 	keyHash := hashKey(rawKey)
 
@@ -220,21 +423,27 @@ func (ks *KeyStore) ValidateKey(rawKey string) (*UserInfo, error) {
 		return entry.info, nil
 	}
 
-	// Cache miss or expired — query SQLite
+	// Cache miss or expired — query SQLite (no JOIN, just key fields)
 	var info UserInfo
 	err := ks.db.QueryRow(`
-		SELECT ak.id, ak.key_prefix, ak.name, ak.group_id, ug.name, ug.profile
-		FROM api_keys ak
-		JOIN user_groups ug ON ak.group_id = ug.id
-		WHERE ak.key_hash = ? AND ak.is_active = 1`,
+		SELECT id, key_prefix, user_name
+		FROM api_keys
+		WHERE key_hash = ? AND is_active = 1`,
 		keyHash,
-	).Scan(&info.KeyID, &info.KeyPrefix, &info.Name, &info.GroupID, &info.GroupName, &info.Profile)
+	).Scan(&info.KeyID, &info.KeyPrefix, &info.UserName)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate key: %w", err)
+	}
+
+	// Resolve group and profile from group_members
+	group, err := ks.GetUserGroup(info.UserName)
+	if err == nil && group != nil {
+		info.GroupName = group.Name
+		info.Profile = group.Profile
 	}
 
 	// Update cache
@@ -256,13 +465,11 @@ func (ks *KeyStore) updateLastUsed(keyID int64) {
 	ks.db.Exec("UPDATE api_keys SET last_used = CURRENT_TIMESTAMP WHERE id = ?", keyID)
 }
 
-// ListKeys returns all API keys with their group info.
+// ListKeys returns all API keys.
 func (ks *KeyStore) ListKeys() ([]*KeyInfo, error) {
 	rows, err := ks.db.Query(`
-		SELECT ak.id, ak.key_prefix, ak.name, ak.group_id, ug.name, ak.is_active, ak.created_at, ak.last_used
-		FROM api_keys ak
-		JOIN user_groups ug ON ak.group_id = ug.id
-		ORDER BY ak.created_at DESC`)
+		SELECT id, key_prefix, user_name, is_active, created_at, last_used
+		FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list keys: %w", err)
 	}
@@ -271,7 +478,7 @@ func (ks *KeyStore) ListKeys() ([]*KeyInfo, error) {
 	var keys []*KeyInfo
 	for rows.Next() {
 		var k KeyInfo
-		if err := rows.Scan(&k.KeyID, &k.KeyPrefix, &k.Name, &k.GroupID, &k.GroupName, &k.IsActive, &k.CreatedAt, &k.LastUsed); err != nil {
+		if err := rows.Scan(&k.KeyID, &k.KeyPrefix, &k.UserName, &k.IsActive, &k.CreatedAt, &k.LastUsed); err != nil {
 			return nil, fmt.Errorf("failed to scan key: %w", err)
 		}
 		keys = append(keys, &k)
@@ -291,16 +498,6 @@ func (ks *KeyStore) RevokeKey(id int64) error {
 	}
 	ks.invalidateCache()
 	return nil
-}
-
-// GetGroupMemberCount returns the number of (active) keys in a group.
-func (ks *KeyStore) GetGroupMemberCount(groupID int64) (int, error) {
-	var count int
-	err := ks.db.QueryRow("SELECT COUNT(*) FROM api_keys WHERE group_id = ? AND is_active = 1", groupID).Scan(&count)
-	if err != nil {
-		return 0, err
-	}
-	return count, nil
 }
 
 // invalidateCache clears all cached key lookups.

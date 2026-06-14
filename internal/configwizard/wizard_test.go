@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/iimmutable/cc-modelrouter/internal/auth"
 	"github.com/iimmutable/cc-modelrouter/internal/config"
 )
 
@@ -1231,6 +1232,453 @@ func TestEditRoute_EscapeProviderDropdownKeepsCompletedEntry(t *testing.T) {
 	}
 	if m.state.EditRouteChain[0].Provider != "openrouter" || m.state.EditRouteChain[0].Model != "claude-sonnet-4" {
 		t.Error("completed entry should remain intact after escape")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Main menu renumbering (9 items: 0-8)
+// ---------------------------------------------------------------------------
+
+func TestMainMenu_NavigationBounds(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMainMenu)
+
+	// Start at 0
+	m.state.ProviderCursor = 0
+
+	// Down to 8
+	for i := 0; i < 8; i++ {
+		msg := tea.KeyMsg{Type: tea.KeyDown}
+		m.Update(msg)
+	}
+	if m.state.ProviderCursor != 8 {
+		t.Errorf("expected cursor 8 after 8 downs, got %d", m.state.ProviderCursor)
+	}
+
+	// Down should stay at 8
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+	m.Update(msg)
+	if m.state.ProviderCursor != 8 {
+		t.Errorf("expected cursor 8 (clamped), got %d", m.state.ProviderCursor)
+	}
+
+	// Up to 0
+	for i := 0; i < 8; i++ {
+		msg = tea.KeyMsg{Type: tea.KeyUp}
+		m.Update(msg)
+	}
+	if m.state.ProviderCursor != 0 {
+		t.Errorf("expected cursor 0 after 8 ups, got %d", m.state.ProviderCursor)
+	}
+
+	// Up should stay at 0
+	msg = tea.KeyMsg{Type: tea.KeyUp}
+	m.Update(msg)
+	if m.state.ProviderCursor != 0 {
+		t.Errorf("expected cursor 0 (clamped), got %d", m.state.ProviderCursor)
+	}
+}
+
+func TestMainMenu_EscapeJumpsToSaveQuit(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMainMenu)
+	m.state.ProviderCursor = 0
+
+	// First escape jumps to Save & Exit (index 7)
+	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	m.Update(msg)
+	if m.state.ProviderCursor != 7 {
+		t.Errorf("expected cursor 7 (Save & Exit), got %d", m.state.ProviderCursor)
+	}
+
+	// Second escape jumps to Quit (index 8)
+	msg = tea.KeyMsg{Type: tea.KeyEscape}
+	m.Update(msg)
+	if m.state.ProviderCursor != 8 {
+		t.Errorf("expected cursor 8 (Quit), got %d", m.state.ProviderCursor)
+	}
+}
+
+func TestMainMenu_NavigateToMultiUser(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMainMenu)
+
+	// Navigate to index 5 (Multi-User)
+	m.state.ProviderCursor = 4
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+	m.Update(msg)
+	if m.state.ProviderCursor != 5 {
+		t.Errorf("expected cursor 5 (Multi-User), got %d", m.state.ProviderCursor)
+	}
+
+	// Enter should navigate to ScreenMultiUser
+	msg = tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+	if m.state.CurrentScreen != ScreenMultiUser {
+		t.Errorf("expected ScreenMultiUser, got %d", m.state.CurrentScreen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-User screen
+// ---------------------------------------------------------------------------
+
+func TestMultiUser_GetMaxFields(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	if m.getMaxFields() != 5 {
+		t.Errorf("expected 5 fields for ScreenMultiUser, got %d", m.getMaxFields())
+	}
+}
+
+func TestMultiUser_ToggleCheckbox(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 0
+
+	if m.state.MultiUserEnabled {
+		t.Error("should start disabled")
+	}
+
+	// Space toggles on
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	m.Update(msg)
+	if !m.state.MultiUserEnabled {
+		t.Error("should be enabled after space")
+	}
+
+	// Space toggles off
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}
+	m.Update(msg)
+	if m.state.MultiUserEnabled {
+		t.Error("should be disabled after second space")
+	}
+}
+
+func TestMultiUser_NumericInput(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 1 // Global Max Concurrency
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}}
+	m.Update(msg)
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}}
+	m.Update(msg)
+	if m.state.MultiUserGlobalMax != "50" {
+		t.Errorf("expected '50', got %q", m.state.MultiUserGlobalMax)
+	}
+
+	// Letters should be filtered
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
+	m.Update(msg)
+	if m.state.MultiUserGlobalMax != "50" {
+		t.Errorf("expected '50' (unchanged), got %q", m.state.MultiUserGlobalMax)
+	}
+
+	// Backspace
+	msg = tea.KeyMsg{Type: tea.KeyBackspace}
+	m.Update(msg)
+	if m.state.MultiUserGlobalMax != "5" {
+		t.Errorf("expected '5', got %q", m.state.MultiUserGlobalMax)
+	}
+}
+
+func TestMultiUser_EscapeSyncsConfig(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.state.MultiUserEnabled = true
+	m.state.MultiUserGlobalMax = "200"
+
+	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenMainMenu {
+		t.Errorf("expected ScreenMainMenu, got %d", m.state.CurrentScreen)
+	}
+	if !m.state.Config.MultiUser.Enabled {
+		t.Error("multi-user should be enabled in config")
+	}
+	if m.state.Config.MultiUser.GlobalMaxConc != 200 {
+		t.Errorf("expected GlobalMaxConc=200, got %d", m.state.Config.MultiUser.GlobalMaxConc)
+	}
+	if !m.state.HasChanges {
+		t.Error("should have unsaved changes")
+	}
+}
+
+func TestMultiUser_EnterOnManageGroups(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 4 // Manage Groups button
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenGroups {
+		t.Errorf("expected ScreenGroups, got %d", m.state.CurrentScreen)
+	}
+}
+
+func TestMultiUser_EnterOnFieldSaves(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 1 // Any non-button field
+	m.state.MultiUserEnabled = true
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenMainMenu {
+		t.Errorf("expected ScreenMainMenu after save, got %d", m.state.CurrentScreen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Groups screen
+// ---------------------------------------------------------------------------
+
+func TestGroups_Navigation(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenGroups)
+	m.state.GroupsList = []*auth.GroupInfo{
+		{ID: 1, Name: "alpha"},
+		{ID: 2, Name: "beta"},
+		{ID: 3, Name: "gamma"},
+	}
+	m.state.GroupsMemberCounts = map[int64]int{1: 2, 2: 5, 3: 1}
+
+	// Down
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+	m.Update(msg)
+	if m.state.GroupsCursor != 1 {
+		t.Errorf("expected cursor 1, got %d", m.state.GroupsCursor)
+	}
+
+	// Down wraps
+	m.Update(msg)
+	m.Update(msg)
+	if m.state.GroupsCursor != 0 {
+		t.Errorf("expected cursor 0 (wrap), got %d", m.state.GroupsCursor)
+	}
+
+	// Up wraps
+	msg = tea.KeyMsg{Type: tea.KeyUp}
+	m.Update(msg)
+	if m.state.GroupsCursor != 2 {
+		t.Errorf("expected cursor 2 (wrap up), got %d", m.state.GroupsCursor)
+	}
+}
+
+func TestGroups_EnterOnEmptyNavigatesToCreate(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenGroups)
+	m.state.GroupsList = nil
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenCreateGroup {
+		t.Errorf("expected ScreenCreateGroup, got %d", m.state.CurrentScreen)
+	}
+	if m.state.EditingGroupID != 0 {
+		t.Error("should be creating, not editing")
+	}
+}
+
+func TestGroups_EnterOnItemNavigatesToEdit(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenGroups)
+	m.state.GroupsList = []*auth.GroupInfo{
+		{ID: 1, Name: "alpha", Profile: "standard", PriorityWeight: 0.5, MaxConcurrency: 10},
+	}
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenCreateGroup {
+		t.Errorf("expected ScreenCreateGroup, got %d", m.state.CurrentScreen)
+	}
+	if m.state.EditingGroupID != 1 {
+		t.Errorf("expected EditingGroupID=1, got %d", m.state.EditingGroupID)
+	}
+	if m.state.NewGroupName != "alpha" {
+		t.Errorf("expected name 'alpha', got %q", m.state.NewGroupName)
+	}
+	// Should start at field 1 (skip locked name)
+	if m.focusedField != 1 {
+		t.Errorf("expected focusedField=1, got %d", m.focusedField)
+	}
+}
+
+func TestGroups_EscapeGoesToMainMenu(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenGroups)
+
+	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenMainMenu {
+		t.Errorf("expected ScreenMainMenu, got %d", m.state.CurrentScreen)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Create/Edit Group screen
+// ---------------------------------------------------------------------------
+
+func TestCreateGroup_GetMaxFields(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	if m.getMaxFields() != 6 {
+		t.Errorf("expected 6 fields for ScreenCreateGroup, got %d", m.getMaxFields())
+	}
+}
+
+func TestCreateGroup_TabCycles(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	m.focusedField = 0
+
+	msg := tea.KeyMsg{Type: tea.KeyTab}
+	m.Update(msg)
+	if m.focusedField != 1 {
+		t.Errorf("expected 1, got %d", m.focusedField)
+	}
+
+	// Cycle through all 6
+	for i := 0; i < 5; i++ {
+		m.Update(msg)
+	}
+	// Should wrap back to 0
+	if m.focusedField != 0 {
+		t.Errorf("expected 0 (wrap), got %d", m.focusedField)
+	}
+}
+
+func TestCreateGroup_NameInput(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	m.focusedField = 0
+
+	for _, r := range []rune{'d', 'e', 'v', 's'} {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		m.Update(msg)
+	}
+	if m.state.NewGroupName != "devs" {
+		t.Errorf("expected 'devs', got %q", m.state.NewGroupName)
+	}
+
+	// Backspace
+	msg := tea.KeyMsg{Type: tea.KeyBackspace}
+	m.Update(msg)
+	if m.state.NewGroupName != "dev" {
+		t.Errorf("expected 'dev', got %q", m.state.NewGroupName)
+	}
+}
+
+func TestCreateGroup_EditModeNameLocked(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	m.state.EditingGroupID = 1
+	m.state.NewGroupName = "locked-name"
+	m.focusedField = 0
+
+	// Typing should have no effect
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}
+	m.Update(msg)
+	if m.state.NewGroupName != "locked-name" {
+		t.Errorf("name should be locked, got %q", m.state.NewGroupName)
+	}
+}
+
+func TestCreateGroup_CancelButton(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	m.focusedField = 5 // Cancel button
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenGroups {
+		t.Errorf("expected ScreenGroups, got %d", m.state.CurrentScreen)
+	}
+}
+
+func TestCreateGroup_EscapeGoesToGroups(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+
+	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenGroups {
+		t.Errorf("expected ScreenGroups, got %d", m.state.CurrentScreen)
+	}
+}
+
+func TestCreateGroup_TabHidesDropdown(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	m.focusedField = 1
+	m.state.ShowGroupProfileDropdown = true
+	m.state.NewGroupProfileDropdownCursor = 2
+
+	msg := tea.KeyMsg{Type: tea.KeyTab}
+	m.Update(msg)
+
+	if m.state.ShowGroupProfileDropdown {
+		t.Error("dropdown should be hidden when tabbing away")
+	}
+	if m.state.NewGroupProfileDropdownCursor != 0 {
+		t.Errorf("dropdown cursor should be 0, got %d", m.state.NewGroupProfileDropdownCursor)
+	}
+}
+
+func TestCreateGroup_ProfileDropdownNavigation(t *testing.T) {
+	m := newTestModel()
+	m.state.Config.Router.Profiles = map[string]config.ProfileConfig{
+		"alpha": {Name: "Alpha"},
+		"beta":  {Name: "Beta"},
+		"gamma": {Name: "Gamma"},
+	}
+	toScreen(m, ScreenCreateGroup)
+	m.focusedField = 1
+	m.state.NewGroupProfileNames = []string{"alpha", "beta", "gamma"}
+	m.state.ShowGroupProfileDropdown = true
+	m.state.NewGroupProfileDropdownCursor = 0
+
+	// Down
+	msg := tea.KeyMsg{Type: tea.KeyDown}
+	m.Update(msg)
+	if m.state.NewGroupProfileDropdownCursor != 1 {
+		t.Errorf("expected 1, got %d", m.state.NewGroupProfileDropdownCursor)
+	}
+
+	// Enter selects
+	msg = tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+	if m.state.NewGroupProfile != "beta" {
+		t.Errorf("expected 'beta', got %q", m.state.NewGroupProfile)
+	}
+	if m.state.ShowGroupProfileDropdown {
+		t.Error("dropdown should close after selection")
+	}
+}
+
+func TestCreateGroup_ProfileDropdownEscapeCloses(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenCreateGroup)
+	m.focusedField = 1
+	m.state.ShowGroupProfileDropdown = true
+
+	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	m.Update(msg)
+
+	if m.state.ShowGroupProfileDropdown {
+		t.Error("dropdown should close on escape")
+	}
+	if m.state.CurrentScreen != ScreenCreateGroup {
+		t.Error("should stay on create group screen")
 	}
 }
 

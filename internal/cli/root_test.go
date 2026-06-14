@@ -93,7 +93,7 @@ func TestNewRootCommand_SubcommandCounts(t *testing.T) {
 	cmd := NewRootCommand()
 
 	subcommands := cmd.Commands()
-	expectedCount := 11 // code, start, stop, restart, status, clean, config, logs, monitor, profile, keys
+	expectedCount := 12 // code, start, stop, restart, status, clean, config, logs, monitor, profile, keys, gen
 
 	if len(subcommands) != expectedCount {
 		t.Errorf("expected %d subcommands, got %d", expectedCount, len(subcommands))

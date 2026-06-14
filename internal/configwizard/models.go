@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/iimmutable/cc-modelrouter/internal/auth"
 	"github.com/iimmutable/cc-modelrouter/internal/config"
 )
 
@@ -24,6 +25,11 @@ const (
 	ScreenLogging
 	ScreenViewConfig
 	ScreenTestConnection
+	ScreenAPIKeys
+	ScreenCreateAPIKey
+	ScreenMultiUser      // Global multi-user settings
+	ScreenGroups         // Group list + CRUD
+	ScreenCreateGroup    // Create/edit group form
 )
 
 // WizardState holds all state for the configuration wizard.
@@ -137,6 +143,36 @@ type WizardState struct {
 	// Migration state (when creating first profile with legacy routes)
 	ShowMigrationModal bool // Show migration confirmation modal
 	MigrationChoice    int  // 0 = copy routes, 1 = start empty
+
+	// API Keys screen state
+	KeysList        []*auth.KeyInfo // populated from DB
+	KeysCursor      int            // selected key in list
+	NewKeyName      string         // name for new key
+	NewKeyGroup     string         // group for new key
+	NewKeyGroups    []*auth.GroupInfo // available groups (dropdown)
+	CreatedRawKey   string         // shown once after creation
+	KeyShowConfirm  bool           // show "save this key" warning
+
+	// Multi-User screen state
+	MultiUserEnabled   bool   // multi-user toggle
+	MultiUserGlobalMax string // global max concurrency
+	MultiUserWREDMin   string // WRED min depth
+	MultiUserWREDMax   string // WRED max depth
+
+	// Groups list screen state
+	GroupsList         []*auth.GroupInfo // populated from DB
+	GroupsCursor       int              // selected group in list
+	GroupsMemberCounts map[int64]int     // group ID → member count
+
+	// Create/Edit group form state
+	NewGroupName            string   // group name
+	NewGroupProfile         string   // route profile
+	NewGroupPriority        string   // priority weight
+	NewGroupMaxConc         string   // max concurrency
+	NewGroupProfileNames    []string // available profile names (sorted)
+	ShowGroupProfileDropdown bool     // show profile dropdown
+	NewGroupProfileDropdownCursor int // cursor in profile dropdown
+	EditingGroupID          int64    // 0=create, >0=edit
 }
 
 // ProviderPreset defines preset provider configurations.

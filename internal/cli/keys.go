@@ -22,41 +22,27 @@ func NewKeysCommand() *cobra.Command {
 	cmd.AddCommand(NewKeysListCommand())
 	cmd.AddCommand(NewKeysRevokeCommand())
 	cmd.AddCommand(NewGroupsCommand())
-	return cmd
-}
-
-// NewGroupsCommand creates the groups subcommand group.
-func NewGroupsCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "groups",
-		Short: "Manage user groups for multi-user mode",
-		Long:  `Manage user groups that map API keys to routing profiles with QoS settings.`,
-	}
-	cmd.AddCommand(NewGroupsListCommand())
-	cmd.AddCommand(NewGroupsCreateCommand())
-	cmd.AddCommand(NewGroupsUpdateCommand())
-	cmd.AddCommand(NewGroupsDeleteCommand())
+	cmd.AddCommand(NewSettingsCommand())
 	return cmd
 }
 
 // --- keys create ---
 
 func NewKeysCreateCommand() *cobra.Command {
-	var name, group string
+	var name string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new API key",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runKeysCreate(name, group)
+			return runKeysCreate(name)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "Key name (description)")
-	cmd.Flags().StringVar(&group, "group", "", "Group name to assign key to")
-	cmd.MarkFlagRequired("group")
+	cmd.Flags().StringVar(&name, "name", "", "User name (description)")
+	cmd.MarkFlagRequired("name")
 	return cmd
 }
 
-func runKeysCreate(name, group string) error {
+func runKeysCreate(name string) error {
 	db, err := openUsageDB()
 	if err != nil {
 		return err
@@ -65,23 +51,14 @@ func runKeysCreate(name, group string) error {
 
 	ks := auth.NewKeyStore(db)
 
-	g, err := ks.GetGroupByName(group)
-	if err != nil {
-		return fmt.Errorf("failed to look up group: %w", err)
-	}
-	if g == nil {
-		return fmt.Errorf("group not found: %s", group)
-	}
-
-	rawKey, keyID, err := ks.CreateKey(name, g.ID)
+	rawKey, keyID, err := ks.CreateKey(name)
 	if err != nil {
 		return fmt.Errorf("failed to create key: %w", err)
 	}
 
 	fmt.Printf("Key created successfully!\n")
-	fmt.Printf("  ID:    %d\n", keyID)
-	fmt.Printf("  Name:  %s\n", name)
-	fmt.Printf("  Group: %s\n", group)
+	fmt.Printf("  ID:      %d\n", keyID)
+	fmt.Printf("  User:    %s\n", name)
 	fmt.Printf("\n  API Key (save now, cannot be retrieved again):\n")
 	fmt.Printf("  %s\n", rawKey)
 	return nil
@@ -118,7 +95,7 @@ func runKeysList() error {
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tPREFIX\t\tNAME\tGROUP\t\tACTIVE\tLAST USED")
+	fmt.Fprintln(tw, "ID\tPREFIX\t\tUSER\t\t\tACTIVE\tLAST USED")
 	for _, k := range keys {
 		lastUsed := "never"
 		if k.LastUsed != nil {
@@ -128,8 +105,8 @@ func runKeysList() error {
 		if !k.IsActive {
 			active = "no"
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n",
-			k.KeyID, k.KeyPrefix, k.Name, k.GroupName, active, lastUsed)
+		fmt.Fprintf(tw, "%d\t%s\t%s\t\t%s\t%s\n",
+			k.KeyID, k.KeyPrefix, k.UserName, active, lastUsed)
 	}
 	tw.Flush()
 	return nil
@@ -169,6 +146,22 @@ func runKeysRevoke(idStr string) error {
 	return nil
 }
 
+// --- groups ---
+
+func NewGroupsCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "groups",
+		Short: "Manage user groups for multi-user mode",
+		Long:  `Manage user groups that map API keys to routing profiles with QoS settings.`,
+	}
+	cmd.AddCommand(NewGroupsListCommand())
+	cmd.AddCommand(NewGroupsCreateCommand())
+	cmd.AddCommand(NewGroupsUpdateCommand())
+	cmd.AddCommand(NewGroupsDeleteCommand())
+	cmd.AddCommand(NewMembersCommand())
+	return cmd
+}
+
 // --- groups list ---
 
 func NewGroupsListCommand() *cobra.Command {
@@ -189,7 +182,7 @@ func runGroupsList() error {
 	defer db.Close()
 
 	ks := auth.NewKeyStore(db)
-	groups, err := ks.ListGroups()
+	groups, err := ks.ListGroupsWithMemberCounts()
 	if err != nil {
 		return fmt.Errorf("failed to list groups: %w", err)
 	}
@@ -202,9 +195,8 @@ func runGroupsList() error {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\t\tPROFILE\t\tPRIORITY\tMAX_CONC\tMEMBERS")
 	for _, g := range groups {
-		members, _ := ks.GetGroupMemberCount(g.ID)
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%.2f\t%d\t%d\n",
-			g.ID, g.Name, g.Profile, g.PriorityWeight, g.MaxConcurrency, members)
+			g.ID, g.Name, g.Profile, g.PriorityWeight, g.MaxConcurrency, g.MemberCount)
 	}
 	tw.Flush()
 	return nil
@@ -346,6 +338,193 @@ func runGroupsDelete(idStr string) error {
 	}
 
 	fmt.Printf("Group %d deleted.\n", id)
+	return nil
+}
+
+// --- members ---
+
+func NewMembersCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "members",
+		Short: "Manage group members",
+		Long:  `Add, remove, or list members (users) in a group.`,
+	}
+	cmd.AddCommand(NewMembersListCommand())
+	cmd.AddCommand(NewMembersAddCommand())
+	cmd.AddCommand(NewMembersRemoveCommand())
+	return cmd
+}
+
+func NewMembersListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list <group-id>",
+		Short: "List members of a group",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMembersList(args[0])
+		},
+	}
+}
+
+func runMembersList(groupIDStr string) error {
+	var groupID int64
+	if _, err := fmt.Sscanf(groupIDStr, "%d", &groupID); err != nil {
+		return fmt.Errorf("invalid group ID: %s", groupIDStr)
+	}
+
+	db, err := openUsageDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	members, err := ks.ListGroupMembers(groupID)
+	if err != nil {
+		return fmt.Errorf("failed to list members: %w", err)
+	}
+
+	if len(members) == 0 {
+		fmt.Println("No members in group.")
+		return nil
+	}
+	for _, m := range members {
+		fmt.Println(m)
+	}
+	return nil
+}
+
+func NewMembersAddCommand() *cobra.Command {
+	var user string
+	cmd := &cobra.Command{
+		Use:   "add <group-id>",
+		Short: "Add a user to a group",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMembersAdd(args[0], user)
+		},
+	}
+	cmd.Flags().StringVar(&user, "user", "", "User name to add")
+	cmd.MarkFlagRequired("user")
+	return cmd
+}
+
+func runMembersAdd(groupIDStr, userName string) error {
+	var groupID int64
+	if _, err := fmt.Sscanf(groupIDStr, "%d", &groupID); err != nil {
+		return fmt.Errorf("invalid group ID: %s", groupIDStr)
+	}
+
+	db, err := openUsageDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	if err := ks.AddGroupMember(groupID, userName); err != nil {
+		return fmt.Errorf("failed to add member: %w", err)
+	}
+
+	fmt.Printf("Added %s to group %d.\n", userName, groupID)
+	return nil
+}
+
+func NewMembersRemoveCommand() *cobra.Command {
+	var user string
+	cmd := &cobra.Command{
+		Use:   "remove <group-id>",
+		Short: "Remove a user from a group",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMembersRemove(args[0], user)
+		},
+	}
+	cmd.Flags().StringVar(&user, "user", "", "User name to remove")
+	cmd.MarkFlagRequired("user")
+	return cmd
+}
+
+func runMembersRemove(groupIDStr, userName string) error {
+	var groupID int64
+	if _, err := fmt.Sscanf(groupIDStr, "%d", &groupID); err != nil {
+		return fmt.Errorf("invalid group ID: %s", groupIDStr)
+	}
+
+	db, err := openUsageDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	if err := ks.RemoveGroupMember(groupID, userName); err != nil {
+		return fmt.Errorf("failed to remove member: %w", err)
+	}
+
+	fmt.Printf("Removed %s from group %d.\n", userName, groupID)
+	return nil
+}
+
+// --- settings ---
+
+func NewSettingsCommand() *cobra.Command {
+	var enabled bool
+	var globalMax int
+	var wredMin, wredMax float64
+	cmd := &cobra.Command{
+		Use:   "settings",
+		Short: "View or update multi-user settings",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSettings(cmd, enabled, globalMax, wredMin, wredMax)
+		},
+	}
+	cmd.Flags().BoolVar(&enabled, "enabled", false, "Enable or disable multi-user mode")
+	cmd.Flags().IntVar(&globalMax, "global-max", -1, "Global max concurrency (0=auto/100, -1=keep)")
+	cmd.Flags().Float64Var(&wredMin, "wred-min", -1, "WRED min depth (-1=keep)")
+	cmd.Flags().Float64Var(&wredMax, "wred-max", -1, "WRED max depth (-1=keep)")
+	return cmd
+}
+
+func runSettings(cmd *cobra.Command, enabled bool, globalMax int, wredMin, wredMax float64) error {
+	db, err := openUsageDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	s, err := ks.GetSettings()
+	if err != nil {
+		return fmt.Errorf("failed to read settings: %w", err)
+	}
+
+	if cmd.Flags().Changed("enabled") {
+		s.Enabled = enabled
+	}
+	if cmd.Flags().Changed("global-max") {
+		s.GlobalMaxConc = globalMax
+	}
+	if cmd.Flags().Changed("wred-min") {
+		s.WREDMinDepth = wredMin
+	}
+	if cmd.Flags().Changed("wred-max") {
+		s.WREDMaxDepth = wredMax
+	}
+
+	changed := cmd.Flags().Changed("enabled") || cmd.Flags().Changed("global-max") ||
+		cmd.Flags().Changed("wred-min") || cmd.Flags().Changed("wred-max")
+	if changed {
+		if err := ks.UpdateSettings(s); err != nil {
+			return fmt.Errorf("failed to update settings: %w", err)
+		}
+	}
+
+	fmt.Printf("Multi-user settings:\n")
+	fmt.Printf("  Enabled:        %v\n", s.Enabled)
+	fmt.Printf("  Global Max:     %d\n", s.GlobalMaxConc)
+	fmt.Printf("  WRED Min Depth: %.2f\n", s.WREDMinDepth)
+	fmt.Printf("  WRED Max Depth: %.2f\n", s.WREDMaxDepth)
 	return nil
 }
 

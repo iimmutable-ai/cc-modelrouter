@@ -74,6 +74,20 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/_admin/qos/provider/") && r.Method == http.MethodPost:
 		a.handleResetProvider(w, r)
 
+	// Multi-user: Group members
+	case r.Method == http.MethodGet && strings.Count(path, "/") == 4 && strings.HasPrefix(path, "/_admin/groups/") && strings.HasSuffix(path, "/members"):
+		a.handleListGroupMembers(w, r)
+	case r.Method == http.MethodPost && strings.Count(path, "/") == 4 && strings.HasPrefix(path, "/_admin/groups/") && strings.HasSuffix(path, "/members"):
+		a.handleAddGroupMember(w, r)
+	case r.Method == http.MethodDelete && strings.Count(path, "/") == 5 && strings.HasPrefix(path, "/_admin/groups/") && strings.Contains(path, "/members/"):
+		a.handleRemoveGroupMember(w, r)
+
+	// Multi-user: Settings
+	case path == "/_admin/settings" && r.Method == http.MethodGet:
+		a.handleGetSettings(w, r)
+	case path == "/_admin/settings" && r.Method == http.MethodPut:
+		a.handleUpdateSettings(w, r)
+
 	default:
 		http.Error(w, "Unknown admin endpoint", http.StatusNotFound)
 	}
@@ -233,19 +247,17 @@ func (a *AdminHandler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	type keyResp struct {
 		ID       int64   `json:"id"`
 		Prefix   string  `json:"prefix"`
-		Name     string  `json:"name"`
-		Group    string  `json:"group"`
+		UserName string  `json:"userName"`
 		Active   bool    `json:"active"`
 		LastUsed *string `json:"lastUsed,omitempty"`
 	}
 	resp := make([]keyResp, len(keys))
 	for i, k := range keys {
 		resp[i] = keyResp{
-			ID:    k.KeyID,
-			Prefix: k.KeyPrefix,
-			Name:  k.Name,
-			Group: k.GroupName,
-			Active: k.IsActive,
+			ID:       k.KeyID,
+			Prefix:   k.KeyPrefix,
+			UserName: k.UserName,
+			Active:   k.IsActive,
 		}
 		if k.LastUsed != nil {
 			s := k.LastUsed.Format("2006-01-02T15:04:05Z07:00")
@@ -263,18 +275,17 @@ func (a *AdminHandler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name    string `json:"name"`
-		GroupID int64  `json:"groupId"`
+		UserName string `json:"userName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	if req.GroupID == 0 {
-		writeAdminError(w, http.StatusBadRequest, "groupId is required")
+	if req.UserName == "" {
+		writeAdminError(w, http.StatusBadRequest, "userName is required")
 		return
 	}
-	rawKey, keyID, err := ks.CreateKey(req.Name, req.GroupID)
+	rawKey, keyID, err := ks.CreateKey(req.UserName)
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -314,7 +325,7 @@ func (a *AdminHandler) handleListGroups(w http.ResponseWriter, r *http.Request) 
 		writeAdminError(w, http.StatusServiceUnavailable, "Multi-user not enabled")
 		return
 	}
-	groups, err := ks.ListGroups()
+	groups, err := ks.ListGroupsWithMemberCounts()
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -329,14 +340,13 @@ func (a *AdminHandler) handleListGroups(w http.ResponseWriter, r *http.Request) 
 	}
 	resp := make([]groupResp, len(groups))
 	for i, g := range groups {
-		count, _ := ks.GetGroupMemberCount(g.ID)
 		resp[i] = groupResp{
 			ID:             g.ID,
 			Name:           g.Name,
 			Profile:        g.Profile,
 			PriorityWeight: g.PriorityWeight,
 			MaxConcurrency: g.MaxConcurrency,
-			Members:        count,
+			Members:        g.MemberCount,
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -410,6 +420,158 @@ func (a *AdminHandler) handleDeleteGroup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := ks.DeleteGroup(id); err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// --- Multi-user: Group members ---
+
+func (a *AdminHandler) handleListGroupMembers(w http.ResponseWriter, r *http.Request) {
+	ks := a.handler.GetKeyStore()
+	if ks == nil {
+		writeAdminError(w, http.StatusServiceUnavailable, "Multi-user not enabled")
+		return
+	}
+	// Extract group ID from /_admin/groups/<id>/members
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/_admin/groups/"), "/")
+	if len(parts) < 2 {
+		writeAdminError(w, http.StatusBadRequest, "Invalid path")
+		return
+	}
+	groupID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "Invalid group ID")
+		return
+	}
+	members, err := ks.ListGroupMembers(groupID)
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"members": members})
+}
+
+func (a *AdminHandler) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
+	ks := a.handler.GetKeyStore()
+	if ks == nil {
+		writeAdminError(w, http.StatusServiceUnavailable, "Multi-user not enabled")
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/_admin/groups/"), "/")
+	if len(parts) < 2 {
+		writeAdminError(w, http.StatusBadRequest, "Invalid path")
+		return
+	}
+	groupID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "Invalid group ID")
+		return
+	}
+	var req struct {
+		UserName string `json:"userName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if req.UserName == "" {
+		writeAdminError(w, http.StatusBadRequest, "userName is required")
+		return
+	}
+	if err := ks.AddGroupMember(groupID, req.UserName); err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (a *AdminHandler) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
+	ks := a.handler.GetKeyStore()
+	if ks == nil {
+		writeAdminError(w, http.StatusServiceUnavailable, "Multi-user not enabled")
+		return
+	}
+	// Extract /_admin/groups/<id>/members/<userName>
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/_admin/groups/"), "/")
+	if len(parts) < 3 {
+		writeAdminError(w, http.StatusBadRequest, "Invalid path")
+		return
+	}
+	groupID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "Invalid group ID")
+		return
+	}
+	userName := parts[2]
+	if err := ks.RemoveGroupMember(groupID, userName); err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// --- Multi-user: Settings ---
+
+func (a *AdminHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	ks := a.handler.GetKeyStore()
+	if ks == nil {
+		writeAdminError(w, http.StatusServiceUnavailable, "Multi-user not enabled")
+		return
+	}
+	s, err := ks.GetSettings()
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled":         s.Enabled,
+		"globalMaxConc":   s.GlobalMaxConc,
+		"wredMinDepth":    s.WREDMinDepth,
+		"wredMaxDepth":    s.WREDMaxDepth,
+	})
+}
+
+func (a *AdminHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	ks := a.handler.GetKeyStore()
+	if ks == nil {
+		writeAdminError(w, http.StatusServiceUnavailable, "Multi-user not enabled")
+		return
+	}
+	var req struct {
+		Enabled       *bool    `json:"enabled"`
+		GlobalMaxConc *int     `json:"globalMaxConc"`
+		WREDMinDepth  *float64 `json:"wredMinDepth"`
+		WREDMaxDepth  *float64 `json:"wredMaxDepth"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	s, err := ks.GetSettings()
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if req.Enabled != nil {
+		s.Enabled = *req.Enabled
+	}
+	if req.GlobalMaxConc != nil {
+		s.GlobalMaxConc = *req.GlobalMaxConc
+	}
+	if req.WREDMinDepth != nil {
+		s.WREDMinDepth = *req.WREDMinDepth
+	}
+	if req.WREDMaxDepth != nil {
+		s.WREDMaxDepth = *req.WREDMaxDepth
+	}
+	if err := ks.UpdateSettings(s); err != nil {
 		writeAdminError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

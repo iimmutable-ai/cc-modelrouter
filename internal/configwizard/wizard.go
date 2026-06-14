@@ -1,6 +1,7 @@
 package configwizard
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,7 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iimmutable/cc-modelrouter/internal/auth"
 	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable/cc-modelrouter/internal/logging"
+	"github.com/iimmutable/cc-modelrouter/internal/usage"
 
 	"github.com/mattn/go-runewidth"
 
@@ -218,6 +222,10 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.state.LogLevelDropdownCursor = 0
 				m.state.ShowLogDestDropdown = false
 				m.state.LogDestDropdownCursor = 0
+			}
+			if m.state.CurrentScreen == ScreenCreateGroup {
+				m.state.ShowGroupProfileDropdown = false
+				m.state.NewGroupProfileDropdownCursor = 0
 			}
 		}
 		return m, nil
@@ -446,6 +454,34 @@ func (m *WizardModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+	case ScreenAPIKeys:
+		if msg.String() == "c" || msg.String() == "C" {
+			m.state.NewKeyName = ""
+			m.state.NewKeyGroup = ""
+			if len(m.state.NewKeyGroups) > 0 {
+				m.state.NewKeyGroup = m.state.NewKeyGroups[0].Name
+			}
+			m.focusedField = 0
+			m.state.CurrentScreen = ScreenCreateAPIKey
+			return m, nil
+		}
+	case ScreenCreateAPIKey:
+		return m.handleCreateAPIKeyInput(msg)
+	case ScreenMultiUser:
+		return m.handleMultiUserInput(msg)
+	case ScreenGroups:
+		// Shortcut keys for group management
+		if msg.String() == "a" || msg.String() == "A" {
+			return m.handleGroupsAdd()
+		}
+		if msg.String() == "e" || msg.String() == "E" {
+			return m.handleGroupsEdit()
+		}
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			return m.handleGroupsDelete()
+		}
+	case ScreenCreateGroup:
+		return m.handleCreateGroupInput(msg)
 	}
 
 	return m, nil
@@ -464,10 +500,10 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 
 	switch m.state.CurrentScreen {
 	case ScreenMainMenu:
-		if m.state.ProviderCursor != 5 {
-			m.state.ProviderCursor = 5 // Jump to "Save & Exit"
+		if m.state.ProviderCursor != 7 {
+			m.state.ProviderCursor = 7 // Jump to "Save & Exit"
 		} else {
-			m.state.ProviderCursor = 6 // Already on Save & Exit, go to "Quit without saving"
+			m.state.ProviderCursor = 8 // Already on Save & Exit, go to "Quit without saving"
 		}
 		return m, nil
 
@@ -675,6 +711,52 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 	case ScreenTestConnection:
 		m.state.CurrentScreen = ScreenProviders
 
+	case ScreenAPIKeys:
+		m.state.KeysCursor = 0
+		m.state.ProviderCursor = m.state.MainMenuCursor
+		m.state.CurrentScreen = ScreenMainMenu
+
+	case ScreenCreateAPIKey:
+		m.state.NewKeyName = ""
+		m.state.NewKeyGroup = ""
+		m.state.KeyShowConfirm = false
+		m.state.CreatedRawKey = ""
+		m.focusedField = 0
+		m.state.CurrentScreen = ScreenAPIKeys
+		return m, nil
+
+	case ScreenMultiUser:
+		// Cancel — discard changes, restore snapshot
+		return m.handleMultiUserCancel()
+
+	case ScreenGroups:
+		m.state.GroupsList = nil
+		m.state.GroupsMemberCounts = nil
+		m.state.GroupsCursor = 0
+		m.state.ProviderCursor = m.state.MainMenuCursor
+		m.state.CurrentScreen = ScreenMainMenu
+		return m, nil
+
+	case ScreenCreateGroup:
+		// Close profile dropdown first if open
+		if m.state.ShowGroupProfileDropdown {
+			m.state.ShowGroupProfileDropdown = false
+			m.state.NewGroupProfileDropdownCursor = 0
+			return m, nil
+		}
+		// Clear form, go back to groups list
+		m.state.NewGroupName = ""
+		m.state.NewGroupProfile = ""
+		m.state.NewGroupPriority = ""
+		m.state.NewGroupMaxConc = ""
+		m.state.ShowGroupProfileDropdown = false
+		m.state.NewGroupProfileDropdownCursor = 0
+		m.state.EditingGroupID = 0
+		m.state.ErrorMessage = ""
+		m.focusedField = 0
+		m.state.CurrentScreen = ScreenGroups
+		return m, nil
+
 	default:
 		m.state.ProviderCursor = m.state.MainMenuCursor
 		m.state.CurrentScreen = ScreenMainMenu
@@ -793,8 +875,41 @@ func (m *WizardModel) handleNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ScreenMainMenu:
 		if isUp && m.state.ProviderCursor > 0 {
 			m.state.ProviderCursor--
-		} else if !isUp && m.state.ProviderCursor < 6 {
+		} else if !isUp && m.state.ProviderCursor < 8 {
 			m.state.ProviderCursor++
+		}
+
+	case ScreenAPIKeys:
+		keyCount := len(m.state.KeysList)
+		if keyCount > 0 {
+			if isUp {
+				m.state.KeysCursor = (m.state.KeysCursor - 1 + keyCount) % keyCount
+			} else {
+				m.state.KeysCursor = (m.state.KeysCursor + 1) % keyCount
+			}
+		}
+
+	case ScreenGroups:
+		groupCount := len(m.state.GroupsList)
+		if groupCount > 0 {
+			if isUp {
+				m.state.GroupsCursor = (m.state.GroupsCursor - 1 + groupCount) % groupCount
+			} else {
+				m.state.GroupsCursor = (m.state.GroupsCursor + 1) % groupCount
+			}
+		}
+
+	case ScreenCreateGroup:
+		if m.state.ShowGroupProfileDropdown {
+			profileNames := m.state.NewGroupProfileNames
+			if len(profileNames) > 0 {
+				if isUp {
+					m.state.NewGroupProfileDropdownCursor = (m.state.NewGroupProfileDropdownCursor - 1 + len(profileNames)) % len(profileNames)
+				} else {
+					m.state.NewGroupProfileDropdownCursor = (m.state.NewGroupProfileDropdownCursor + 1) % len(profileNames)
+				}
+			}
+			return m, nil
 		}
 
 	case ScreenProviders:
@@ -921,6 +1036,32 @@ func (m *WizardModel) handleEnter() (tea.Model, tea.Cmd) {
 		// Export config to file
 		m.exportConfig()
 
+	case ScreenAPIKeys:
+		return m.handleAPIKeysEnter()
+
+	case ScreenCreateAPIKey:
+		return m.handleCreateAPIKeyEnter()
+
+	case ScreenMultiUser:
+		switch m.focusedField {
+		case 4: // Manage Groups button
+			m.loadGroupsData()
+			m.state.GroupsCursor = 0
+			m.state.CurrentScreen = ScreenGroups
+			return m, nil
+		case 5: // Save button
+			return m.handleMultiUserSave()
+		case 6: // Cancel button
+			return m.handleMultiUserCancel()
+		}
+		// Fields 0-3: input fields, Enter does nothing
+
+	case ScreenGroups:
+		return m.handleGroupsEnter()
+
+	case ScreenCreateGroup:
+		return m.handleCreateGroupEnter()
+
 	case ScreenAddProvider1:
 		// If dropdown is visible and focused on name field, select preset
 		if m.state.ShowDropdown && m.focusedField == 0 {
@@ -1005,15 +1146,62 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 		m.state.CurrentScreen = ScreenLogging
 	case 4: // View Config
 		m.state.CurrentScreen = ScreenViewConfig
-	case 5: // Save & Exit
+	case 5: // Multi-User
+		// Load settings from SQLite (single source of truth)
+		m.loadMultiUserSettings()
+		// Snapshot for Cancel
+		m.state.MultiUserOrigEnabled = m.state.MultiUserEnabled
+		m.state.MultiUserOrigGlobalMax = m.state.MultiUserGlobalMax
+		m.state.MultiUserOrigWREDMin = m.state.MultiUserWREDMin
+		m.state.MultiUserOrigWREDMax = m.state.MultiUserWREDMax
+		m.focusedField = 0
+		m.state.CurrentScreen = ScreenMultiUser
+	case 6: // API Keys
+		m.state.KeysCursor = 0
+		m.loadKeysData()
+		m.state.CurrentScreen = ScreenAPIKeys
+		return m, nil
+	case 7: // Save & Exit
 		if m.state.HasUnsavedChanges() {
 			if err := m.saveConfig(); err != nil {
 				m.state.ErrorMessage = fmt.Sprintf("Failed to save: %v", err)
 				return m, nil
 			}
+
+			// Save multi-user settings to SQLite
+			if db, err := openWizardDB(); err == nil {
+				ks := auth.NewKeyStore(db)
+				globalMax := 0
+				if v, err := strconv.Atoi(strings.TrimSpace(m.state.MultiUserGlobalMax)); err == nil && v > 0 {
+					globalMax = v
+				}
+				wredMin := 0.5
+				if v, err := strconv.ParseFloat(strings.TrimSpace(m.state.MultiUserWREDMin), 64); err == nil && v > 0 {
+					wredMin = v
+				}
+				wredMax := 0.9
+				if v, err := strconv.ParseFloat(strings.TrimSpace(m.state.MultiUserWREDMax), 64); err == nil && v > 0 {
+					wredMax = v
+				}
+				settings := &auth.MultiUserSettings{
+					Enabled:       m.state.MultiUserEnabled,
+					GlobalMaxConc: globalMax,
+					WREDMinDepth:  wredMin,
+					WREDMaxDepth:  wredMax,
+				}
+				if err := ks.UpdateSettings(settings); err != nil {
+					m.state.ErrorMessage = fmt.Sprintf("Failed to save multi-user settings: %v", err)
+					db.Close()
+					return m, nil
+				}
+				db.Close()
+			}
+
 			// Sync shell RC file to match current config
 			if shellCfg, err := GetShellConfig(); err == nil && len(m.state.ResolvedAPIKeys) > 0 {
-				_ = shellCfg.SyncAllShellExports(m.state.ResolvedAPIKeys)
+				if err := shellCfg.SyncAllShellExports(m.state.ResolvedAPIKeys); err != nil {
+					logging.Warnf("failed to sync shell exports: %v", err)
+				}
 				shellCfg.SourceAllNow(m.state.ResolvedAPIKeys)
 				shellCfg.WriteEnvFile(m.state.ResolvedAPIKeys)
 			}
@@ -1026,7 +1214,7 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Quit
-	case 6: // Quit without saving
+	case 8: // Quit without saving
 		if m.state.HasUnsavedChanges() {
 			m.state.ShowConfirm = true
 			m.state.ConfirmCursor = 0 // Default to Yes (user initiated quit)
@@ -1089,7 +1277,9 @@ func (m *WizardModel) handleProvidersDelete() (tea.Model, tea.Cmd) {
 
 		// Remove from shell RC file
 		if shellCfg, err := GetShellConfig(); err == nil {
-			_ = shellCfg.RemoveFromShellConfig(providerName)
+			if err := shellCfg.RemoveFromShellConfig(providerName); err != nil {
+				logging.Warnf("failed to remove shell config for %s: %v", providerName, err)
+			}
 		}
 
 		// Clamp cursor
@@ -1733,6 +1923,12 @@ func (m *WizardModel) getMaxFields() int {
 		return 4 // Name, Description, Create button, Cancel button
 	case ScreenEditProfile:
 		return 4 // Name, Description, Save button, Cancel button
+	case ScreenCreateAPIKey:
+		return 3 // Name, Group, Create button
+	case ScreenMultiUser:
+		return 7 // Checkbox, MaxConc, WRED Min, WRED Max, Manage Groups, Save, Cancel
+	case ScreenCreateGroup:
+		return 6 // Name, Profile, Priority, MaxConc, Save button, Cancel button
 	default:
 		return 0
 	}
@@ -2151,6 +2347,16 @@ func (m *WizardModel) View() string {
 		return m.renderViewConfig()
 	case ScreenTestConnection:
 		return m.renderTestConnection()
+	case ScreenAPIKeys:
+		return m.renderAPIKeys()
+	case ScreenCreateAPIKey:
+		return m.renderCreateAPIKey()
+	case ScreenMultiUser:
+		return m.renderMultiUser()
+	case ScreenGroups:
+		return m.renderGroups()
+	case ScreenCreateGroup:
+		return m.renderCreateGroup()
 	default:
 		return m.renderMainMenu()
 	}
@@ -2260,8 +2466,10 @@ func (m *WizardModel) renderMainMenu() string {
 		{"[3] Proxy", fmt.Sprintf("Host: %s", serverInfo), 2},
 		{"[4] Logging", fmt.Sprintf("Level: %s, Destination: %s", logLevel, logDest), 3},
 		{"[5] View Config", "Browse current configuration", 4},
-		{"[6] Save & Exit", "Write changes to disk", 5},
-		{"[7] Quit without saving", "Exit without saving changes", 6},
+		{"[6] Multi-User", "Manage multi-user settings and groups", 5},
+		{"[7] API Keys", "Manage API keys for multi-user mode", 6},
+		{"[8] Save & Exit", "Write changes to disk", 7},
+		{"[9] Quit without saving", "Exit without saving changes", 8},
 	}
 
 	var menuLines []string
@@ -3952,6 +4160,998 @@ func (m *WizardModel) renderViewConfig() string {
 		m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, closeBtn)),
 		m.blankLine(),
 		HelpTextStyle.Width(m.contentWidth()).Render("[P] Export to file   [Esc] Close"),
+	)
+
+	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
+	return m.renderWithModal(mainBox)
+}
+
+// --- API Keys Screen ---
+
+// openWizardDB opens the usage database for the wizard.
+func openWizardDB() (*sql.DB, error) {
+	dbPath, err := usage.DBPath()
+	if err != nil {
+		return nil, err
+	}
+	return usage.InitDB(dbPath)
+}
+
+// loadMultiUserSettings reads multi-user settings from SQLite into wizard state.
+func (m *WizardModel) loadMultiUserSettings() {
+	db, err := openWizardDB()
+	if err != nil {
+		// Fallback to defaults
+		m.state.MultiUserEnabled = false
+		m.state.MultiUserGlobalMax = "100"
+		m.state.MultiUserWREDMin = "0.50"
+		m.state.MultiUserWREDMax = "0.90"
+		return
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	s, err := ks.GetSettings()
+	if err != nil {
+		m.state.MultiUserEnabled = false
+		m.state.MultiUserGlobalMax = "100"
+		m.state.MultiUserWREDMin = "0.50"
+		m.state.MultiUserWREDMax = "0.90"
+		return
+	}
+
+	m.state.MultiUserEnabled = s.Enabled
+	if s.GlobalMaxConc > 0 {
+		m.state.MultiUserGlobalMax = strconv.Itoa(s.GlobalMaxConc)
+	} else {
+		m.state.MultiUserGlobalMax = "100"
+	}
+	m.state.MultiUserWREDMin = fmt.Sprintf("%.2f", s.WREDMinDepth)
+	if m.state.MultiUserWREDMin == "0.00" {
+		m.state.MultiUserWREDMin = "0.50"
+	}
+	m.state.MultiUserWREDMax = fmt.Sprintf("%.2f", s.WREDMaxDepth)
+	if m.state.MultiUserWREDMax == "0.00" {
+		m.state.MultiUserWREDMax = "0.90"
+	}
+}
+
+// loadKeysData loads API keys and groups from the database.
+func (m *WizardModel) loadKeysData() {
+	db, err := openWizardDB()
+	if err != nil {
+		m.state.KeysList = nil
+		return
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	keys, err := ks.ListKeys()
+	if err != nil {
+		m.state.KeysList = nil
+		return
+	}
+	m.state.KeysList = keys
+
+	groups, err := ks.ListGroups()
+	if err != nil {
+		m.state.NewKeyGroups = nil
+		return
+	}
+	m.state.NewKeyGroups = groups
+}
+
+// loadGroupsData loads user groups and their member counts from the database.
+func (m *WizardModel) loadGroupsData() {
+	db, err := openWizardDB()
+	if err != nil {
+		m.state.GroupsList = nil
+		m.state.GroupsMemberCounts = nil
+		return
+	}
+	defer db.Close()
+
+	ks := auth.NewKeyStore(db)
+	groupsWithCounts, err := ks.ListGroupsWithMemberCounts()
+	if err != nil {
+		m.state.GroupsList = nil
+		m.state.GroupsMemberCounts = nil
+		return
+	}
+
+	groups := make([]*auth.GroupInfo, len(groupsWithCounts))
+	memberCounts := make(map[int64]int, len(groupsWithCounts))
+	for i, gc := range groupsWithCounts {
+		groups[i] = &gc.GroupInfo
+		memberCounts[gc.ID] = gc.MemberCount
+	}
+	m.state.GroupsList = groups
+	m.state.GroupsMemberCounts = memberCounts
+}
+
+// loadGroupProfileNames reads profile names from config into a sorted slice.
+func (m *WizardModel) loadGroupProfileNames() {
+	m.state.NewGroupProfileNames = m.state.Config.GetProfileNames()
+}
+
+func (m *WizardModel) handleAPIKeysEnter() (tea.Model, tea.Cmd) {
+	if m.state.CreatedRawKey != "" {
+		// Dismiss the "key created" display and reload
+		m.state.CreatedRawKey = ""
+		m.state.KeyShowConfirm = false
+		m.loadKeysData()
+		return m, nil
+	}
+
+	if len(m.state.KeysList) == 0 {
+		// No keys — go to create screen
+		m.state.NewKeyName = ""
+		m.state.NewKeyGroup = ""
+		m.focusedField = 0
+		m.state.CurrentScreen = ScreenCreateAPIKey
+		return m, nil
+	}
+
+	// Revoke selected key
+	selected := m.state.KeysList[m.state.KeysCursor]
+	if !selected.IsActive {
+		return m, nil
+	}
+
+	m.state.ShowConfirm = true
+	m.state.ConfirmCursor = 1 // Default to No (destructive)
+	m.state.ConfirmMessage = fmt.Sprintf("Revoke key %s (%s)?", selected.KeyPrefix, selected.UserName)
+	m.state.ConfirmAction = func() bool {
+		db, err := openWizardDB()
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
+			return false
+		}
+		defer db.Close()
+		ks := auth.NewKeyStore(db)
+		if err := ks.RevokeKey(selected.KeyID); err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to revoke: %v", err)
+			return false
+		}
+		m.loadKeysData()
+		return true
+	}
+	return m, nil
+}
+
+func (m *WizardModel) renderAPIKeys() string {
+	title := TitleStyle.Width(m.contentWidth()).Render("API Keys")
+	backHint := HelpTextStyle.Render("[Esc] Back")
+
+	var lines []string
+
+	if m.state.CreatedRawKey != "" {
+		lines = append(lines, "")
+		lines = append(lines, StatusOKStyle.Bold(true).Render("API Key Created"))
+		lines = append(lines, "")
+		lines = append(lines, HelpTextStyle.Render("Save this key now — it cannot be retrieved again:"))
+		lines = append(lines, "")
+		raw := m.state.CreatedRawKey
+		for i := 0; i < len(raw); i += 32 {
+			end := i + 32
+			if end > len(raw) {
+				end = len(raw)
+			}
+			lines = append(lines, MenuItemSelectedStyle.Bold(true).Render(raw[i:end]))
+		}
+		lines = append(lines, "")
+		closeBtn := ButtonPrimaryStyle.Render(" [OK] ")
+		lines = append(lines, m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, closeBtn)))
+	} else if len(m.state.KeysList) == 0 {
+		lines = append(lines, "")
+		lines = append(lines, MenuItemDimmedStyle.Render("No API keys found."))
+		lines = append(lines, "")
+		createBtn := ButtonPrimaryStyle.Render("[Create Key]")
+		lines = append(lines, m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, createBtn)))
+	} else {
+		header := TableHeaderStyle.Width(m.contentWidth()).Render(
+			fmt.Sprintf("%-14s %-16s %-6s %-14s", "PREFIX", "USER", "ACTIVE", "LAST USED"),
+		)
+		lines = append(lines, header)
+
+		for i, k := range m.state.KeysList {
+			lastUsed := "never"
+			if k.LastUsed != nil {
+				lastUsed = k.LastUsed.Format("2006-01-02 15:04")
+			}
+			active := "yes"
+			if !k.IsActive {
+				active = "no"
+			}
+			name := k.UserName
+			if name == "" {
+				name = "(unnamed)"
+			}
+			row := fmt.Sprintf("%-14s %-16s %-6s %-14s",
+				k.KeyPrefix, name, active, lastUsed)
+
+			if i == m.state.KeysCursor {
+				row = ListItemSelectedStyle.Width(m.contentWidth()).Render(row)
+			} else if !k.IsActive {
+				row = ListItemInvalidStyle.Width(m.contentWidth()).Render(row)
+			} else {
+				row = ListItemStyle.Width(m.contentWidth()).Render(row)
+			}
+			lines = append(lines, row)
+		}
+
+		lines = append(lines, "")
+		if m.state.KeysCursor < len(m.state.KeysList) {
+			selected := m.state.KeysList[m.state.KeysCursor]
+			action := "Press [Enter] to revoke"
+			if !selected.IsActive {
+				action = "This key has been revoked"
+			}
+			lines = append(lines, HelpTextStyle.Render(action))
+		}
+		lines = append(lines, "")
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.fullWidth(title+"  "+backHint),
+		m.blankLine(),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+		m.blankLine(),
+		HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Navigate   [Enter] Action   [Esc] Back"),
+	)
+
+	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
+	return m.renderWithModal(mainBox)
+}
+
+// --- Create API Key Screen ---
+
+func (m *WizardModel) handleCreateAPIKeyEnter() (tea.Model, tea.Cmd) {
+	switch m.focusedField {
+	case 2: // Create button
+		if m.state.NewKeyName == "" {
+			m.state.ErrorMessage = "Key name is required"
+			return m, nil
+		}
+		if m.state.NewKeyGroup == "" {
+			m.state.ErrorMessage = "Group is required"
+			return m, nil
+		}
+
+		db, err := openWizardDB()
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
+			return m, nil
+		}
+		defer db.Close()
+
+		ks := auth.NewKeyStore(db)
+		g, err := ks.GetGroupByName(m.state.NewKeyGroup)
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to look up group: %v", err)
+			return m, nil
+		}
+		if g == nil {
+			m.state.ErrorMessage = fmt.Sprintf("Group not found: %s", m.state.NewKeyGroup)
+			return m, nil
+		}
+
+		rawKey, _, err := ks.CreateKey(m.state.NewKeyName)
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to create key: %v", err)
+			return m, nil
+		}
+
+		m.state.CreatedRawKey = rawKey
+		m.state.KeyShowConfirm = true
+		m.state.ErrorMessage = ""
+		m.state.CurrentScreen = ScreenAPIKeys
+		m.loadKeysData()
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *WizardModel) handleCreateAPIKeyInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.focusedField {
+	case 0: // Name
+		if msg.Type == tea.KeyBackspace {
+			if len(m.state.NewKeyName) > 0 {
+				m.state.NewKeyName = m.state.NewKeyName[:len(m.state.NewKeyName)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && len(m.state.NewKeyName) < 64 {
+			m.state.NewKeyName += msg.String()
+		}
+	case 1: // Group — cycle through available groups
+		if msg.Type == tea.KeyUp || msg.String() == "k" {
+			if len(m.state.NewKeyGroups) > 0 {
+				m.state.NewKeyGroup = m.state.NewKeyGroups[(len(m.state.NewKeyGroups)-1)%len(m.state.NewKeyGroups)].Name
+			}
+		} else if msg.Type == tea.KeyDown || msg.String() == "j" || msg.String() == " " {
+			if len(m.state.NewKeyGroups) > 0 {
+				m.state.NewKeyGroup = m.state.NewKeyGroups[0].Name
+			}
+		} else if len(msg.String()) == 1 {
+			for _, g := range m.state.NewKeyGroups {
+				if len(g.Name) > 0 && g.Name[0] == msg.String()[0] {
+					m.state.NewKeyGroup = g.Name
+					break
+				}
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *WizardModel) renderCreateAPIKey() string {
+	title := TitleStyle.Width(m.contentWidth()).Render("Create API Key")
+	backHint := HelpTextStyle.Render("[Esc] Back")
+
+	var lines []string
+	lines = append(lines, "")
+
+	// Name field
+	nameLabel := "Name:"
+	nameStyle := InputFieldStyle
+	if m.focusedField == 0 {
+		nameStyle = InputFieldFocusedStyle
+	}
+	lines = append(lines, nameLabel)
+	lines = append(lines, nameStyle.Width(m.inputFieldWidth()).Render(m.state.NewKeyName))
+	if m.focusedField == 0 {
+		lines = append(lines, HelpTextStyle.Render("Type a descriptive name for this key"))
+	}
+	lines = append(lines, "")
+
+	// Group selector
+	groupLabel := "Group:"
+	groupStyle := InputFieldStyle
+	if m.focusedField == 1 {
+		groupStyle = InputFieldFocusedStyle
+	}
+	lines = append(lines, groupLabel)
+
+	if len(m.state.NewKeyGroups) > 0 {
+		for _, g := range m.state.NewKeyGroups {
+			if g.Name == m.state.NewKeyGroup {
+				lines = append(lines, ListItemSelectedStyle.Width(m.inputFieldWidth()).Render("▸ "+g.Name))
+			} else {
+				lines = append(lines, ListItemStyle.Width(m.inputFieldWidth()).Render("  "+g.Name))
+			}
+		}
+	} else {
+		lines = append(lines, groupStyle.Width(m.inputFieldWidth()).Render("No groups — run 'ccrouter groups create' first"))
+	}
+	if m.focusedField == 1 {
+		lines = append(lines, HelpTextStyle.Render("↑/↓ to select group"))
+	}
+	lines = append(lines, "")
+
+	// Create button
+	createStyle := ButtonStyle
+	if m.focusedField == 2 {
+		createStyle = ButtonActiveStyle
+	}
+	createBtn := createStyle.Render(" [Create] ")
+	lines = append(lines, m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, createBtn)))
+
+	if m.state.ErrorMessage != "" {
+		lines = append(lines, "")
+		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render(m.state.ErrorMessage))
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.fullWidth(title+"  "+backHint),
+		m.blankLine(),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+		m.blankLine(),
+		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next field   [Enter] Create   [Esc] Back"),
+	)
+
+	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
+	return m.renderWithModal(mainBox)
+}
+
+// --- Multi-User Screen ---
+
+func (m *WizardModel) handleMultiUserInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.focusedField {
+	case 0: // Checkbox
+		if msg.String() == " " {
+			m.state.MultiUserEnabled = !m.state.MultiUserEnabled
+		}
+	case 1: // Global Max Concurrency
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			if len(m.state.MultiUserGlobalMax) > 0 {
+				m.state.MultiUserGlobalMax = m.state.MultiUserGlobalMax[:len(m.state.MultiUserGlobalMax)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
+			if len(m.state.MultiUserGlobalMax) < 6 {
+				m.state.MultiUserGlobalMax += msg.String()
+			}
+		}
+	case 2: // WRED Min Depth
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			if len(m.state.MultiUserWREDMin) > 0 {
+				m.state.MultiUserWREDMin = m.state.MultiUserWREDMin[:len(m.state.MultiUserWREDMin)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && ((msg.String() >= "0" && msg.String() <= "9") || msg.String() == ".") {
+			if len(m.state.MultiUserWREDMin) < 4 {
+				m.state.MultiUserWREDMin += msg.String()
+			}
+		}
+	case 3: // WRED Max Depth
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			if len(m.state.MultiUserWREDMax) > 0 {
+				m.state.MultiUserWREDMax = m.state.MultiUserWREDMax[:len(m.state.MultiUserWREDMax)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && ((msg.String() >= "0" && msg.String() <= "9") || msg.String() == ".") {
+			if len(m.state.MultiUserWREDMax) < 4 {
+				m.state.MultiUserWREDMax += msg.String()
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *WizardModel) handleMultiUserSave() (tea.Model, tea.Cmd) {
+	// Settings stay in-memory; written to SQLite on "Save & Exit"
+	m.state.HasChanges = true
+	m.state.ProviderCursor = m.state.MainMenuCursor
+	m.state.ErrorMessage = ""
+	m.state.CurrentScreen = ScreenMainMenu
+	return m, nil
+}
+
+func (m *WizardModel) handleMultiUserCancel() (tea.Model, tea.Cmd) {
+	// Restore snapshot values — discard any edits
+	m.state.MultiUserEnabled = m.state.MultiUserOrigEnabled
+	m.state.MultiUserGlobalMax = m.state.MultiUserOrigGlobalMax
+	m.state.MultiUserWREDMin = m.state.MultiUserOrigWREDMin
+	m.state.MultiUserWREDMax = m.state.MultiUserOrigWREDMax
+	m.state.ProviderCursor = m.state.MainMenuCursor
+	m.state.ErrorMessage = ""
+	m.state.CurrentScreen = ScreenMainMenu
+	return m, nil
+}
+
+// --- Groups List Screen ---
+
+func (m *WizardModel) handleGroupsEnter() (tea.Model, tea.Cmd) {
+	if len(m.state.GroupsList) > 0 {
+		return m.handleGroupsEdit()
+	}
+	// No groups — go to create screen
+	return m.handleGroupsAdd()
+}
+
+func (m *WizardModel) handleGroupsAdd() (tea.Model, tea.Cmd) {
+	m.state.NewGroupName = ""
+	m.state.NewGroupProfile = ""
+	m.state.NewGroupPriority = "0.50"
+	m.state.NewGroupMaxConc = "10"
+	m.loadGroupProfileNames()
+	if len(m.state.NewGroupProfileNames) > 0 {
+		m.state.NewGroupProfile = m.state.NewGroupProfileNames[0]
+	}
+	m.state.ShowGroupProfileDropdown = false
+	m.state.NewGroupProfileDropdownCursor = 0
+	m.state.EditingGroupID = 0
+	m.state.ErrorMessage = ""
+	m.focusedField = 0
+	m.state.CurrentScreen = ScreenCreateGroup
+	return m, nil
+}
+
+func (m *WizardModel) handleGroupsEdit() (tea.Model, tea.Cmd) {
+	if len(m.state.GroupsList) == 0 {
+		return m, nil
+	}
+	selected := m.state.GroupsList[m.state.GroupsCursor]
+	m.state.NewGroupName = selected.Name
+	m.state.NewGroupProfile = selected.Profile
+	m.state.NewGroupPriority = fmt.Sprintf("%.2f", selected.PriorityWeight)
+	m.state.NewGroupMaxConc = strconv.Itoa(selected.MaxConcurrency)
+	m.loadGroupProfileNames()
+	m.state.ShowGroupProfileDropdown = false
+	m.state.NewGroupProfileDropdownCursor = 0
+	m.state.EditingGroupID = selected.ID
+	m.state.ErrorMessage = ""
+	// Start at field 1 (skip locked name)
+	m.focusedField = 1
+	m.state.CurrentScreen = ScreenCreateGroup
+	return m, nil
+}
+
+func (m *WizardModel) handleGroupsDelete() (tea.Model, tea.Cmd) {
+	if len(m.state.GroupsList) == 0 {
+		return m, nil
+	}
+	selected := m.state.GroupsList[m.state.GroupsCursor]
+	m.state.ShowConfirm = true
+	m.state.ConfirmCursor = 1 // Default to No (destructive)
+	m.state.ConfirmMessage = fmt.Sprintf("Delete group \"%s\"?", selected.Name)
+	groupID := selected.ID
+	m.state.ConfirmAction = func() bool {
+		db, err := openWizardDB()
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
+			return false
+		}
+		defer db.Close()
+		ks := auth.NewKeyStore(db)
+		if err := ks.DeleteGroup(groupID); err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to delete: %v", err)
+			return false
+		}
+		m.loadGroupsData()
+		return false
+	}
+	return m, nil
+}
+
+// --- Create/Edit Group Screen ---
+
+func (m *WizardModel) handleCreateGroupInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Profile dropdown navigation
+	if m.state.ShowGroupProfileDropdown {
+		if msg.Type == tea.KeyUp || msg.String() == "k" {
+			if len(m.state.NewGroupProfileNames) > 0 {
+				m.state.NewGroupProfileDropdownCursor = (m.state.NewGroupProfileDropdownCursor - 1 + len(m.state.NewGroupProfileNames)) % len(m.state.NewGroupProfileNames)
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyDown || msg.String() == "j" {
+			if len(m.state.NewGroupProfileNames) > 0 {
+				m.state.NewGroupProfileDropdownCursor = (m.state.NewGroupProfileDropdownCursor + 1) % len(m.state.NewGroupProfileNames)
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyEnter {
+			if m.state.NewGroupProfileDropdownCursor < len(m.state.NewGroupProfileNames) {
+				m.state.NewGroupProfile = m.state.NewGroupProfileNames[m.state.NewGroupProfileDropdownCursor]
+			}
+			m.state.ShowGroupProfileDropdown = false
+			m.state.NewGroupProfileDropdownCursor = 0
+			return m, nil
+		}
+		if msg.Type == tea.KeyEscape {
+			m.state.ShowGroupProfileDropdown = false
+			m.state.NewGroupProfileDropdownCursor = 0
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Button navigation (left/right on Save/Cancel buttons)
+	if m.focusedField == 4 || m.focusedField == 5 {
+		if msg.String() == "left" || msg.String() == "h" {
+			m.focusedField = 4
+			return m, nil
+		}
+		if msg.String() == "right" || msg.String() == "l" {
+			m.focusedField = 5
+			return m, nil
+		}
+		if msg.Type == tea.KeyEnter {
+			return m.handleCreateGroupEnter()
+		}
+		return m, nil
+	}
+
+	switch m.focusedField {
+	case 0: // Group name (locked when editing)
+		if m.state.EditingGroupID > 0 {
+			return m, nil
+		}
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			if len(m.state.NewGroupName) > 0 {
+				m.state.NewGroupName = m.state.NewGroupName[:len(m.state.NewGroupName)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && len(m.state.NewGroupName) < 32 {
+			m.state.NewGroupName += msg.String()
+		}
+	case 1: // Profile (opens dropdown on enter, handled in handleEnter)
+		return m, nil
+	case 2: // Priority weight
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			if len(m.state.NewGroupPriority) > 0 {
+				m.state.NewGroupPriority = m.state.NewGroupPriority[:len(m.state.NewGroupPriority)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && ((msg.String() >= "0" && msg.String() <= "9") || msg.String() == ".") {
+			if len(m.state.NewGroupPriority) < 4 {
+				m.state.NewGroupPriority += msg.String()
+			}
+		}
+	case 3: // Max concurrency
+		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
+			if len(m.state.NewGroupMaxConc) > 0 {
+				m.state.NewGroupMaxConc = m.state.NewGroupMaxConc[:len(m.state.NewGroupMaxConc)-1]
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 && msg.String() >= "0" && msg.String() <= "9" {
+			if len(m.state.NewGroupMaxConc) < 4 {
+				m.state.NewGroupMaxConc += msg.String()
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *WizardModel) handleCreateGroupEnter() (tea.Model, tea.Cmd) {
+	// Profile dropdown toggle
+	if m.focusedField == 1 {
+		if m.state.ShowGroupProfileDropdown {
+			if m.state.NewGroupProfileDropdownCursor < len(m.state.NewGroupProfileNames) {
+				m.state.NewGroupProfile = m.state.NewGroupProfileNames[m.state.NewGroupProfileDropdownCursor]
+			}
+			m.state.ShowGroupProfileDropdown = false
+			m.state.NewGroupProfileDropdownCursor = 0
+			return m, nil
+		}
+		m.state.ShowGroupProfileDropdown = true
+		m.state.NewGroupProfileDropdownCursor = 0
+		for i, name := range m.state.NewGroupProfileNames {
+			if name == m.state.NewGroupProfile {
+				m.state.NewGroupProfileDropdownCursor = i
+				break
+			}
+		}
+		return m, nil
+	}
+
+	// Save button
+	if m.focusedField == 4 {
+		return m.handleCreateGroupSave()
+	}
+
+	// Cancel button
+	if m.focusedField == 5 {
+		m.state.NewGroupName = ""
+		m.state.NewGroupProfile = ""
+		m.state.NewGroupPriority = ""
+		m.state.NewGroupMaxConc = ""
+		m.state.ShowGroupProfileDropdown = false
+		m.state.EditingGroupID = 0
+		m.state.ErrorMessage = ""
+		m.focusedField = 0
+		m.state.CurrentScreen = ScreenGroups
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m *WizardModel) handleCreateGroupSave() (tea.Model, tea.Cmd) {
+	// Validate
+	if strings.TrimSpace(m.state.NewGroupName) == "" {
+		m.state.ErrorMessage = "Group name is required"
+		return m, nil
+	}
+	priority, err := strconv.ParseFloat(strings.TrimSpace(m.state.NewGroupPriority), 64)
+	if err != nil || priority < 0 || priority > 1 {
+		m.state.ErrorMessage = "Priority must be between 0.00 and 1.00"
+		return m, nil
+	}
+	maxConc, err := strconv.Atoi(strings.TrimSpace(m.state.NewGroupMaxConc))
+	if err != nil || maxConc < 1 {
+		m.state.ErrorMessage = "Max concurrency must be a positive integer"
+		return m, nil
+	}
+
+	db, err := openWizardDB()
+	if err != nil {
+		m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
+		return m, nil
+	}
+	defer db.Close()
+	ks := auth.NewKeyStore(db)
+
+	if m.state.EditingGroupID > 0 {
+		// Update existing group
+		if err := ks.UpdateGroup(m.state.EditingGroupID, strings.TrimSpace(m.state.NewGroupProfile), priority, maxConc); err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to update: %v", err)
+			return m, nil
+		}
+	} else {
+		// Create new group
+		_, err := ks.CreateGroup(
+			strings.TrimSpace(m.state.NewGroupName),
+			strings.TrimSpace(m.state.NewGroupProfile),
+			priority,
+			maxConc,
+		)
+		if err != nil {
+			m.state.ErrorMessage = fmt.Sprintf("Failed to create: %v", err)
+			return m, nil
+		}
+	}
+
+	// Reload and go back to groups list
+	m.loadGroupsData()
+	m.state.NewGroupName = ""
+	m.state.NewGroupProfile = ""
+	m.state.NewGroupPriority = ""
+	m.state.NewGroupMaxConc = ""
+	m.state.ShowGroupProfileDropdown = false
+	m.state.EditingGroupID = 0
+	m.state.ErrorMessage = ""
+	m.focusedField = 0
+	m.state.CurrentScreen = ScreenGroups
+	return m, nil
+}
+
+// --- Multi-User Render ---
+
+func (m *WizardModel) renderMultiUser() string {
+	title := SectionHeaderStyle.Width(m.contentWidth()).Render("Multi-User Settings")
+
+	// Enable checkbox
+	enabledCheckbox := CheckboxUncheckedStyle.Render()
+	if m.state.MultiUserEnabled {
+		enabledCheckbox = CheckboxCheckedStyle.Render()
+	}
+	checkboxFocused := m.focusedField == 0
+	if checkboxFocused {
+		if m.state.MultiUserEnabled {
+			enabledCheckbox = CheckboxCheckedFocusedStyle.Render()
+		} else {
+			enabledCheckbox = CheckboxUncheckedFocusedStyle.Render()
+		}
+	}
+	checkboxRow := lipgloss.JoinHorizontal(lipgloss.Left, enabledCheckbox, " Enable Multi-User Mode")
+	if checkboxFocused {
+		checkboxRow = FocusedRowStyle.Width(m.contentWidth()).Render(checkboxRow)
+	} else {
+		checkboxRow = lipgloss.NewStyle().Padding(0, 1).Width(m.contentWidth()).Render(checkboxRow)
+	}
+
+	// Global Max Concurrency
+	maxConcLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Global Max Concurrency:")
+	maxConcValue := m.state.MultiUserGlobalMax
+	if m.focusedField == 1 {
+		maxConcValue = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(maxConcValue + "_")
+	} else {
+		maxConcValue = InputFieldStyle.Width(m.inputFieldWidth()).Render(maxConcValue)
+	}
+
+	// WRED Min Depth
+	wredMinLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("WRED Min Depth:")
+	wredMinValue := m.state.MultiUserWREDMin
+	if m.focusedField == 2 {
+		wredMinValue = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(wredMinValue + "_")
+	} else {
+		wredMinValue = InputFieldStyle.Width(m.inputFieldWidth()).Render(wredMinValue)
+	}
+
+	// WRED Max Depth
+	wredMaxLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("WRED Max Depth:")
+	wredMaxValue := m.state.MultiUserWREDMax
+	if m.focusedField == 3 {
+		wredMaxValue = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(wredMaxValue + "_")
+	} else {
+		wredMaxValue = InputFieldStyle.Width(m.inputFieldWidth()).Render(wredMaxValue)
+	}
+
+	// Manage Groups button
+	manageBtn := ButtonStyle.Render(" Manage Groups \u2192 ")
+	if m.focusedField == 4 {
+		manageBtn = ButtonActiveStyle.Render(" Manage Groups \u2192 ")
+	}
+
+	// Save button (green)
+	saveBtn := ButtonSaveStyle.Render(" Save ")
+	if m.focusedField == 5 {
+		saveBtn = ButtonSaveActiveStyle.Render(" Save ")
+	}
+
+	// Cancel button (red)
+	cancelBtn := ButtonCancelStyle.Render(" Cancel ")
+	if m.focusedField == 6 {
+		cancelBtn = ButtonCancelActiveStyle.Render(" Cancel ")
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		title, m.blankLine(),
+		checkboxRow, m.blankLine(),
+		maxConcLabel, m.fullWidth(maxConcValue),
+		wredMinLabel, m.fullWidth(wredMinValue),
+		wredMaxLabel, m.fullWidth(wredMaxValue),
+		m.blankLine(),
+		m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, manageBtn)),
+		m.blankLine(),
+		m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, saveBtn, "  ", cancelBtn)),
+		m.blankLine(),
+		m.divider(),
+		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next   [Enter] Action   [Esc] Cancel & Back   [Space] Toggle"),
+	)
+
+	if m.state.ErrorMessage != "" {
+		content = lipgloss.JoinVertical(
+			lipgloss.Left,
+			content,
+			m.blankLine(),
+			ErrorStyle.Width(m.contentWidth()).Render(m.state.ErrorMessage),
+		)
+	}
+
+	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
+	return m.renderWithModal(mainBox)
+}
+
+// --- Groups List Render ---
+
+func (m *WizardModel) renderGroups() string {
+	title := SectionHeaderStyle.Width(m.contentWidth()).Render("User Groups")
+
+	var lines []string
+	lines = append(lines, "")
+
+	if len(m.state.GroupsList) == 0 {
+		lines = append(lines, MenuItemDimmedStyle.Width(m.contentWidth()).Render("No groups configured."))
+		lines = append(lines, "")
+		addBtn := ButtonPrimaryStyle.Render("[Create Group]")
+		lines = append(lines, m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, addBtn)))
+	} else {
+		header := TableHeaderStyle.Width(m.contentWidth()).Render(
+			fmt.Sprintf("%-16s %-14s %-10s %-8s %-7s", "NAME", "PROFILE", "PRIORITY", "MAXCONC", "MEMBERS"),
+		)
+		lines = append(lines, header)
+
+		for i, g := range m.state.GroupsList {
+			members := 0
+			if m.state.GroupsMemberCounts != nil {
+				members = m.state.GroupsMemberCounts[g.ID]
+			}
+			row := fmt.Sprintf("%-16s %-14s %-10s %-8d %-7d",
+				truncate(g.Name, 16), truncate(g.Profile, 14),
+				fmt.Sprintf("%.2f", g.PriorityWeight), g.MaxConcurrency, members)
+
+			if i == m.state.GroupsCursor {
+				row = ListItemSelectedStyle.Width(m.contentWidth()).Render(row)
+			} else {
+				row = ListItemStyle.Width(m.contentWidth()).Render(row)
+			}
+			lines = append(lines, row)
+		}
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		title, m.blankLine(),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+		m.blankLine(),
+		HelpTextStyle.Width(m.contentWidth()).Render("[a] Add   [e] Edit   [\u232b] Delete   [Enter] Edit   [Esc] Back"),
+	)
+
+	if m.state.ErrorMessage != "" {
+		content = lipgloss.JoinVertical(
+			lipgloss.Left,
+			content,
+			m.blankLine(),
+			ErrorStyle.Width(m.contentWidth()).Render(m.state.ErrorMessage),
+		)
+	}
+
+	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
+	return m.renderWithModal(mainBox)
+}
+
+// --- Create/Edit Group Render ---
+
+func (m *WizardModel) renderCreateGroup() string {
+	titleText := "Create Group"
+	if m.state.EditingGroupID > 0 {
+		titleText = "Edit Group"
+	}
+	title := TitleStyle.Width(m.contentWidth()).Render(titleText)
+	backHint := HelpTextStyle.Render("[Esc] Back")
+
+	var lines []string
+	lines = append(lines, "")
+
+	// Group Name field (locked when editing)
+	nameLabel := "Group Name:"
+	if m.state.EditingGroupID > 0 {
+		nameLabel = "Group Name: (locked)"
+	}
+	lines = append(lines, nameLabel)
+	if m.state.EditingGroupID > 0 {
+		lines = append(lines, InputFieldDisabledStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupName))
+	} else if m.focusedField == 0 {
+		lines = append(lines, InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupName+"_"))
+	} else {
+		lines = append(lines, InputFieldStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupName))
+	}
+	lines = append(lines, "")
+
+	// Profile field with dropdown
+	lines = append(lines, "Route Profile:")
+	if m.focusedField == 1 {
+		lines = append(lines, InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupProfile+" \u25be"))
+	} else {
+		lines = append(lines, InputFieldStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupProfile))
+	}
+
+	// Profile dropdown
+	if m.state.ShowGroupProfileDropdown {
+		var dropdownItems []string
+		dropdownContentWidth := m.inputFieldWidth() - DropdownStyle.GetHorizontalFrameSize()
+		for i, name := range m.state.NewGroupProfileNames {
+			if i == m.state.NewGroupProfileDropdownCursor {
+				dropdownItems = append(dropdownItems, ListItemSelectedStyle.Width(dropdownContentWidth).Render(name))
+			} else {
+				dropdownItems = append(dropdownItems, ListItemStyle.Width(dropdownContentWidth).Render(name))
+			}
+		}
+		if len(dropdownItems) > 0 {
+			dropdown := DropdownStyle.Width(m.inputFieldWidth()).Render(
+				lipgloss.JoinVertical(lipgloss.Left, dropdownItems...),
+			)
+			lines = append(lines, dropdown)
+		}
+	}
+	lines = append(lines, "")
+
+	// Priority Weight field
+	lines = append(lines, "Priority Weight (0.00-1.00):")
+	if m.focusedField == 2 {
+		lines = append(lines, InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupPriority+"_"))
+	} else {
+		lines = append(lines, InputFieldStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupPriority))
+	}
+	lines = append(lines, "")
+
+	// Max Concurrency field
+	lines = append(lines, "Max Concurrency:")
+	if m.focusedField == 3 {
+		lines = append(lines, InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupMaxConc+"_"))
+	} else {
+		lines = append(lines, InputFieldStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupMaxConc))
+	}
+	lines = append(lines, "")
+
+	// Buttons
+	saveBtn := ButtonStyle.Render(" Save ")
+	cancelBtn := ButtonStyle.Render(" Cancel ")
+	if m.focusedField == 4 {
+		saveBtn = ButtonPrimaryStyle.Render(" Save ")
+	}
+	if m.focusedField == 5 {
+		cancelBtn = ButtonDangerStyle.Render(" Cancel ")
+	}
+	buttons := lipgloss.JoinHorizontal(lipgloss.Center, "  ", saveBtn, "    ", cancelBtn, "  ")
+	lines = append(lines, m.fullWidth(buttons))
+
+	if m.state.ErrorMessage != "" {
+		lines = append(lines, "")
+		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render(m.state.ErrorMessage))
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.fullWidth(title+"  "+backHint),
+		m.blankLine(),
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+		m.blankLine(),
+		m.divider(),
+		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next   [Enter] Confirm   [Esc] Cancel"),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)

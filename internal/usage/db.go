@@ -133,7 +133,31 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create multi-user tables: %w", err)
 	}
 
+	// Phase 5: Migrate auth columns (key_encrypted for encrypted key storage)
+	migrateAuthColumns(db)
+
 	return db, nil
+}
+
+// migrateAuthColumns adds columns to auth tables if they don't exist.
+func migrateAuthColumns(db *sql.DB) {
+	migrations := []struct {
+		table  string
+		column string
+		def    string
+	}{
+		{"api_keys", "key_encrypted", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, m := range migrations {
+		var count int
+		row := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name='%s'", m.table, m.column))
+		if err := row.Scan(&count); err != nil {
+			continue
+		}
+		if count == 0 {
+			db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", m.table, m.column, m.def))
+		}
+	}
 }
 
 // migrateColumns adds profile and provider columns if they don't exist.

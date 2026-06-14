@@ -279,30 +279,23 @@ func runStart(cmd *cobra.Command, args []string) error {
 	adminToken := daemon.GenerateAdminToken()
 	server.SetAdminToken(adminToken)
 
-	// Multi-user mode: initialize KeyStore and auth interceptor
-	if cfg.MultiUser.Enabled {
-		keyStore := auth.NewKeyStore(usageDB)
+	// Multi-user mode: read settings from SQLite
+	keyStore := auth.NewKeyStore(usageDB)
+	settings, err := keyStore.GetSettings()
+	if err != nil {
+		return fmt.Errorf("failed to read multi-user settings: %w", err)
+	}
 
-		// Create default group if none exist
-		groups, err := keyStore.ListGroups()
-		if err != nil {
-			return fmt.Errorf("failed to list groups: %w", err)
-		}
-		if len(groups) == 0 {
-			// Seed groups from config
-			for _, gc := range cfg.MultiUser.Groups {
-				if _, err := keyStore.CreateGroup(gc.Name, gc.Profile, gc.PriorityWeight, gc.MaxConcurrency); err != nil {
-					return fmt.Errorf("failed to create group %s: %w", gc.Name, err)
-				}
-			}
-		}
-
+	if settings.Enabled {
 		ai := proxy.NewAuthInterceptor(keyStore)
 		server.SetAuthInterceptor(ai)
 		server.SetMultiUserEnabled(true)
 
-		// Initialize QoS engine with groups from KeyStore
-		groups, _ = keyStore.ListGroups()
+		// Build QoS engine from SQLite groups
+		groups, err := keyStore.ListGroups()
+		if err != nil {
+			return fmt.Errorf("failed to load groups for QoS engine: %w", err)
+		}
 		qosGroupCfgs := make([]qos.GroupConfig, len(groups))
 		for i, g := range groups {
 			qosGroupCfgs[i] = qos.GroupConfig{
@@ -312,14 +305,59 @@ func runStart(cmd *cobra.Command, args []string) error {
 			}
 		}
 		wredCfg := qos.WREDConfig{
-			MinDepth: cfg.MultiUser.WREDMinDepth,
-			MaxDepth: cfg.MultiUser.WREDMaxDepth,
+			MinDepth: settings.WREDMinDepth,
+			MaxDepth: settings.WREDMaxDepth,
 		}
-		globalMax := cfg.MultiUser.GlobalMaxConc
-		qosEngine := qos.NewQoSEngine(globalMax, wredCfg, qosGroupCfgs)
+		qosEngine := qos.NewQoSEngine(settings.GlobalMaxConc, wredCfg, qosGroupCfgs)
 		server.SetQoSEngine(qosEngine)
 
 		fmt.Println("Multi-user mode enabled: API key authentication required")
+	}
+
+	// One-time migration: if legacy config has multi-user enabled, migrate to SQLite
+	if cfg.MultiUser.Enabled {
+		tx, err := usageDB.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin migration tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		migrated := &auth.MultiUserSettings{
+			Enabled:       true,
+			GlobalMaxConc: cfg.MultiUser.GlobalMaxConc,
+			WREDMinDepth:  cfg.MultiUser.WREDMinDepth,
+			WREDMaxDepth:  cfg.MultiUser.WREDMaxDepth,
+		}
+		if migrated.WREDMinDepth == 0 {
+			migrated.WREDMinDepth = 0.5
+		}
+		if migrated.WREDMaxDepth == 0 {
+			migrated.WREDMaxDepth = 0.9
+		}
+		if err := keyStore.UpdateSettings(migrated); err != nil {
+			return fmt.Errorf("failed to migrate multi-user settings: %w", err)
+		}
+		// Seed groups from config if DB is empty
+		existingGroups, err := keyStore.ListGroups()
+		if err != nil {
+			return fmt.Errorf("failed to list groups during migration: %w", err)
+		}
+		if len(existingGroups) == 0 {
+			for _, gc := range cfg.MultiUser.Groups {
+				if _, err := keyStore.CreateGroup(gc.Name, gc.Profile, gc.PriorityWeight, gc.MaxConcurrency); err != nil {
+					return fmt.Errorf("failed to migrate group %s: %w", gc.Name, err)
+				}
+			}
+		}
+		// Clear legacy config field so it's not migrated again
+		cfg.MultiUser.Enabled = false
+		cfg.MultiUser.Groups = nil
+		if err := config.Save(cfg, configPath); err != nil {
+			return fmt.Errorf("failed to clear legacy config: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration: %w", err)
+		}
 	}
 
 	// Initialize handler's active profile
