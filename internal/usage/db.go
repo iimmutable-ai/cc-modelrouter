@@ -103,7 +103,7 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create indexes: %w", err)
 	}
 
-	// Phase 4: Create multi-user tables (api_keys, user_groups)
+	// Phase 4: Create multi-user tables (api_keys, user_groups, multi_user_settings, group_members)
 	multiUserQuery := `
 	CREATE TABLE IF NOT EXISTS user_groups (
 		id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,6 +127,22 @@ func InitDB(path string) (*sql.DB, error) {
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_group ON api_keys(group_id);
+
+	CREATE TABLE IF NOT EXISTS multi_user_settings (
+		id               INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled          INTEGER NOT NULL DEFAULT 0,
+		global_max_conc  INTEGER NOT NULL DEFAULT 0,
+		wred_min_depth   REAL NOT NULL DEFAULT 0.5,
+		wred_max_depth   REAL NOT NULL DEFAULT 0.9
+	);
+	INSERT OR IGNORE INTO multi_user_settings (id) VALUES (1);
+
+	CREATE TABLE IF NOT EXISTS group_members (
+		group_id  INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+		user_name TEXT    NOT NULL,
+		PRIMARY KEY (group_id, user_name)
+	);
+	CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_name);
 	`
 	if _, err := db.Exec(multiUserQuery); err != nil {
 		db.Close()
@@ -136,7 +152,33 @@ func InitDB(path string) (*sql.DB, error) {
 	// Phase 5: Migrate auth columns (key_encrypted for encrypted key storage)
 	migrateAuthColumns(db)
 
+	// Phase 6: Migrate api_keys user_name column
+	migrateMultiUserColumns(db)
+
 	return db, nil
+}
+
+// migrateMultiUserColumns adds the user_name column to api_keys and copies from name.
+func migrateMultiUserColumns(db *sql.DB) {
+	migrations := []struct {
+		table  string
+		column string
+		def    string
+	}{
+		{"api_keys", "user_name", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, m := range migrations {
+		var count int
+		row := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name='%s'", m.table, m.column))
+		if err := row.Scan(&count); err != nil {
+			continue
+		}
+		if count == 0 {
+			db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", m.table, m.column, m.def))
+			// Copy existing name values to user_name
+			db.Exec(fmt.Sprintf("UPDATE %s SET %s = name WHERE %s = ''", m.table, m.column, m.column))
+		}
+	}
 }
 
 // migrateAuthColumns adds columns to auth tables if they don't exist.

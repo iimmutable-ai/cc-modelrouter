@@ -1326,8 +1326,8 @@ func TestMainMenu_NavigateToMultiUser(t *testing.T) {
 func TestMultiUser_GetMaxFields(t *testing.T) {
 	m := newTestModel()
 	toScreen(m, ScreenMultiUser)
-	if m.getMaxFields() != 5 {
-		t.Errorf("expected 5 fields for ScreenMultiUser, got %d", m.getMaxFields())
+	if m.getMaxFields() != 7 {
+		t.Errorf("expected 7 fields for ScreenMultiUser, got %d", m.getMaxFields())
 	}
 }
 
@@ -1383,9 +1383,21 @@ func TestMultiUser_NumericInput(t *testing.T) {
 	}
 }
 
-func TestMultiUser_EscapeSyncsConfig(t *testing.T) {
+func TestMultiUser_EscapeDiscardsChanges(t *testing.T) {
 	m := newTestModel()
 	toScreen(m, ScreenMultiUser)
+
+	// Set original values (snapshot)
+	m.state.MultiUserEnabled = false
+	m.state.MultiUserGlobalMax = "100"
+	m.state.MultiUserWREDMin = "0.5"
+	m.state.MultiUserWREDMax = "0.9"
+	m.state.MultiUserOrigEnabled = false
+	m.state.MultiUserOrigGlobalMax = "100"
+	m.state.MultiUserOrigWREDMin = "0.5"
+	m.state.MultiUserOrigWREDMax = "0.9"
+
+	// Modify values
 	m.state.MultiUserEnabled = true
 	m.state.MultiUserGlobalMax = "200"
 
@@ -1395,14 +1407,15 @@ func TestMultiUser_EscapeSyncsConfig(t *testing.T) {
 	if m.state.CurrentScreen != ScreenMainMenu {
 		t.Errorf("expected ScreenMainMenu, got %d", m.state.CurrentScreen)
 	}
-	if !m.state.Config.MultiUser.Enabled {
-		t.Error("multi-user should be enabled in config")
+	// Values should be restored to snapshot (discarded)
+	if m.state.MultiUserEnabled != false {
+		t.Error("multi-user should be restored to disabled (cancelled)")
 	}
-	if m.state.Config.MultiUser.GlobalMaxConc != 200 {
-		t.Errorf("expected GlobalMaxConc=200, got %d", m.state.Config.MultiUser.GlobalMaxConc)
+	if m.state.MultiUserGlobalMax != "100" {
+		t.Errorf("expected GlobalMax restored to '100', got %q", m.state.MultiUserGlobalMax)
 	}
-	if !m.state.HasChanges {
-		t.Error("should have unsaved changes")
+	if m.state.HasChanges {
+		t.Error("should not have unsaved changes after cancel")
 	}
 }
 
@@ -1419,17 +1432,95 @@ func TestMultiUser_EnterOnManageGroups(t *testing.T) {
 	}
 }
 
-func TestMultiUser_EnterOnFieldSaves(t *testing.T) {
+func TestMultiUser_SaveButton(t *testing.T) {
 	m := newTestModel()
 	toScreen(m, ScreenMultiUser)
-	m.focusedField = 1 // Any non-button field
+	m.focusedField = 5 // Save button
+
 	m.state.MultiUserEnabled = true
+	m.state.MultiUserGlobalMax = "200"
+	m.state.MultiUserWREDMin = "0.3"
+	m.state.MultiUserWREDMax = "0.8"
 
 	msg := tea.KeyMsg{Type: tea.KeyEnter}
 	m.Update(msg)
 
 	if m.state.CurrentScreen != ScreenMainMenu {
-		t.Errorf("expected ScreenMainMenu after save, got %d", m.state.CurrentScreen)
+		t.Errorf("expected ScreenMainMenu, got %d", m.state.CurrentScreen)
+	}
+	// Values should be preserved (saved in-memory)
+	if !m.state.MultiUserEnabled {
+		t.Error("multi-user should remain enabled after save")
+	}
+	if m.state.MultiUserGlobalMax != "200" {
+		t.Errorf("expected GlobalMax=200 after save, got %q", m.state.MultiUserGlobalMax)
+	}
+	if !m.state.HasChanges {
+		t.Error("should have unsaved changes flagged")
+	}
+}
+
+func TestMultiUser_CancelButton(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 6 // Cancel button
+
+	// Set original values (snapshot)
+	m.state.MultiUserEnabled = false
+	m.state.MultiUserGlobalMax = "100"
+	m.state.MultiUserWREDMin = "0.5"
+	m.state.MultiUserWREDMax = "0.9"
+	m.state.MultiUserOrigEnabled = false
+	m.state.MultiUserOrigGlobalMax = "100"
+	m.state.MultiUserOrigWREDMin = "0.5"
+	m.state.MultiUserOrigWREDMax = "0.9"
+
+	// Modify values
+	m.state.MultiUserEnabled = true
+	m.state.MultiUserGlobalMax = "300"
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	if m.state.CurrentScreen != ScreenMainMenu {
+		t.Errorf("expected ScreenMainMenu, got %d", m.state.CurrentScreen)
+	}
+	// Values should be restored to snapshot (discarded)
+	if m.state.MultiUserEnabled != false {
+		t.Error("multi-user should be restored to disabled (cancelled)")
+	}
+	if m.state.MultiUserGlobalMax != "100" {
+		t.Errorf("expected GlobalMax restored to '100', got %q", m.state.MultiUserGlobalMax)
+	}
+}
+
+func TestMultiUser_TabCyclesThroughAllFields(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 0
+
+	// Tab through all 7 fields: checkbox, 3 inputs, Manage Groups, Save, Cancel
+	for i := 1; i <= 7; i++ {
+		msg := tea.KeyMsg{Type: tea.KeyTab}
+		m.Update(msg)
+	}
+	// After 7 tabs from field 0, should be back at field 0
+	if m.focusedField != 0 {
+		t.Errorf("expected to cycle back to field 0, got %d", m.focusedField)
+	}
+}
+
+func TestMultiUser_EnterOnFieldDoesNothing(t *testing.T) {
+	m := newTestModel()
+	toScreen(m, ScreenMultiUser)
+	m.focusedField = 1 // Global Max Concurrency input field
+
+	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	m.Update(msg)
+
+	// Should remain on the same screen (no navigation for input fields)
+	if m.state.CurrentScreen != ScreenMultiUser {
+		t.Errorf("expected ScreenMultiUser, got %d", m.state.CurrentScreen)
 	}
 }
 

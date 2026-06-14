@@ -127,6 +127,40 @@ var (
 				BorderForeground(ErrorBorder).
 				Padding(0, 2)
 
+	// Save button
+	ButtonSaveStyle = lipgloss.NewStyle().
+				Foreground(SuccessColor).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(SuccessBorder).
+				Padding(0, 2)
+
+	// Save button active
+	ButtonSaveActiveStyle = lipgloss.NewStyle().
+				Foreground(BaseBackground).
+				Background(SuccessColor).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(SuccessBorder).
+				Padding(0, 2)
+
+	// Cancel button
+	ButtonCancelStyle = lipgloss.NewStyle().
+				Foreground(ErrorColor).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(ErrorBorder).
+				Padding(0, 2)
+
+	// Cancel button active
+	ButtonCancelActiveStyle = lipgloss.NewStyle().
+				Foreground(BaseBackground).
+				Background(ErrorColor).
+				Bold(true).
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(ErrorBorder).
+				Padding(0, 2)
+
 	// Checkbox - unchecked
 	CheckboxUncheckedStyle = lipgloss.NewStyle().
 				Foreground(SecondaryText).

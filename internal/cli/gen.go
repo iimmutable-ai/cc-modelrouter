@@ -64,7 +64,7 @@ func runGenSettings(url, user, key, output string) error {
 		defer db.Close()
 
 		ks := auth.NewKeyStore(db)
-		raw, _, err := ks.GetRawKeyByName(user)
+		raw, _, err := ks.GetRawKeyByUserName(user)
 		if err != nil {
 			return fmt.Errorf("failed to look up key for user %q: %w", user, err)
 		}

@@ -45,7 +45,7 @@ func (ai *AuthInterceptor) Authenticate(rawToken string) (*auth.UserInfo, error)
 	}
 
 	logging.Debugf("[AUTH] Authenticated: key=%s user=%s group=%s profile=%s",
-		info.KeyPrefix, info.Name, info.GroupName, info.Profile)
+		info.KeyPrefix, info.UserName, info.GroupName, info.Profile)
 
 	return info, nil
 }

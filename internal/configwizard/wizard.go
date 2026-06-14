@@ -107,6 +107,12 @@ func NewWizardModel(cfg *config.Config, configPath string) *WizardModel {
 
 // Init initializes the wizard.
 func (m *WizardModel) Init() tea.Cmd {
+	m.loadMultiUserSettings()
+	// Snapshot for Cancel
+	m.state.MultiUserOrigEnabled = m.state.MultiUserEnabled
+	m.state.MultiUserOrigGlobalMax = m.state.MultiUserGlobalMax
+	m.state.MultiUserOrigWREDMin = m.state.MultiUserWREDMin
+	m.state.MultiUserOrigWREDMax = m.state.MultiUserWREDMax
 	return tea.EnableBracketedPaste
 }
 
@@ -730,11 +736,10 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 		return m.handleMultiUserCancel()
 
 	case ScreenGroups:
-		m.state.GroupsList = nil
-		m.state.GroupsMemberCounts = nil
-		m.state.GroupsCursor = 0
-		m.state.ProviderCursor = m.state.MainMenuCursor
-		m.state.CurrentScreen = ScreenMainMenu
+		// Go back to Multi-User screen without discarding pending group ops.
+		// Ops are preserved so "Save & Exit" can flush them to SQLite.
+		// Discard happens only on Multi-User Cancel/Escape (explicit user intent).
+		m.state.CurrentScreen = ScreenMultiUser
 		return m, nil
 
 	case ScreenCreateGroup:
@@ -1045,7 +1050,10 @@ func (m *WizardModel) handleEnter() (tea.Model, tea.Cmd) {
 	case ScreenMultiUser:
 		switch m.focusedField {
 		case 4: // Manage Groups button
-			m.loadGroupsData()
+			if m.state.GroupsSnapshot == nil {
+				m.loadGroupsData()
+			}
+			m.state.GroupsList = m.effectiveGroupsList()
 			m.state.GroupsCursor = 0
 			m.state.CurrentScreen = ScreenGroups
 			return m, nil
@@ -1147,13 +1155,6 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 	case 4: // View Config
 		m.state.CurrentScreen = ScreenViewConfig
 	case 5: // Multi-User
-		// Load settings from SQLite (single source of truth)
-		m.loadMultiUserSettings()
-		// Snapshot for Cancel
-		m.state.MultiUserOrigEnabled = m.state.MultiUserEnabled
-		m.state.MultiUserOrigGlobalMax = m.state.MultiUserGlobalMax
-		m.state.MultiUserOrigWREDMin = m.state.MultiUserWREDMin
-		m.state.MultiUserOrigWREDMax = m.state.MultiUserWREDMax
 		m.focusedField = 0
 		m.state.CurrentScreen = ScreenMultiUser
 	case 6: // API Keys
@@ -1193,6 +1194,14 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 					m.state.ErrorMessage = fmt.Sprintf("Failed to save multi-user settings: %v", err)
 					db.Close()
 					return m, nil
+				}
+				// Flush pending group changes using the same KeyStore
+				if len(m.state.GroupsPendingOps) > 0 {
+					if err := m.flushGroupChanges(ks); err != nil {
+						m.state.ErrorMessage = fmt.Sprintf("Failed to save group changes: %v", err)
+						db.Close()
+						return m, nil
+					}
 				}
 				db.Close()
 			}
@@ -3129,29 +3138,29 @@ func (m *WizardModel) renderProfileEditModal() string {
 	if m.focusedField == 2 {
 		if m.state.IsCreatingProfile {
 			buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-				ButtonPrimaryStyle.Render("[Create]"),
+				ButtonSaveActiveStyle.Render("[Create]"),
 				"  ",
-				ButtonStyle.Render("[Cancel]"),
+				ButtonCancelStyle.Render("[Cancel]"),
 			)
 		} else {
 			buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-				ButtonPrimaryStyle.Render("[Save]"),
+				ButtonSaveActiveStyle.Render("[Save]"),
 				"  ",
-				ButtonStyle.Render("[Cancel]"),
+				ButtonCancelStyle.Render("[Cancel]"),
 			)
 		}
 	} else {
 		if m.state.IsCreatingProfile {
 			buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-				ButtonStyle.Render("[Create]"),
+				ButtonSaveStyle.Render("[Create]"),
 				"  ",
-				ButtonStyle.Render("[Cancel]"),
+				ButtonCancelStyle.Render("[Cancel]"),
 			)
 		} else {
 			buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-				ButtonStyle.Render("[Save]"),
+				ButtonSaveStyle.Render("[Save]"),
 				"  ",
-				ButtonStyle.Render("[Cancel]"),
+				ButtonCancelStyle.Render("[Cancel]"),
 			)
 		}
 	}
@@ -3268,21 +3277,21 @@ func (m *WizardModel) renderCreateProfile() string {
 	var buttons string
 	if m.focusedField == 2 {
 		buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-			ButtonPrimaryStyle.Render("[Create]"),
+			ButtonSaveActiveStyle.Render("[Create]"),
 			"  ",
-			ButtonStyle.Render("[Cancel]"),
+			ButtonCancelStyle.Render("[Cancel]"),
 		)
 	} else if m.focusedField == 3 {
 		buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-			ButtonStyle.Render("[Create]"),
+			ButtonSaveStyle.Render("[Create]"),
 			"  ",
-			ButtonActiveStyle.Render("[Cancel]"),
+			ButtonCancelActiveStyle.Render("[Cancel]"),
 		)
 	} else {
 		buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-			ButtonStyle.Render("[Create]"),
+			ButtonSaveStyle.Render("[Create]"),
 			"  ",
-			ButtonStyle.Render("[Cancel]"),
+			ButtonCancelStyle.Render("[Cancel]"),
 		)
 	}
 
@@ -3477,21 +3486,21 @@ func (m *WizardModel) renderEditProfile() string {
 	var buttons string
 	if m.focusedField == 2 {
 		buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-			ButtonPrimaryStyle.Render("[Save]"),
+			ButtonSaveActiveStyle.Render("[Save]"),
 			"  ",
-			ButtonStyle.Render("[Cancel]"),
+			ButtonCancelStyle.Render("[Cancel]"),
 		)
 	} else if m.focusedField == 3 {
 		buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-			ButtonStyle.Render("[Save]"),
+			ButtonSaveStyle.Render("[Save]"),
 			"  ",
-			ButtonActiveStyle.Render("[Cancel]"),
+			ButtonCancelActiveStyle.Render("[Cancel]"),
 		)
 	} else {
 		buttons = lipgloss.JoinHorizontal(lipgloss.Left,
-			ButtonStyle.Render("[Save]"),
+			ButtonSaveStyle.Render("[Save]"),
 			"  ",
-			ButtonStyle.Render("[Cancel]"),
+			ButtonCancelStyle.Render("[Cancel]"),
 		)
 	}
 
@@ -4267,6 +4276,143 @@ func (m *WizardModel) loadGroupsData() {
 	}
 	m.state.GroupsList = groups
 	m.state.GroupsMemberCounts = memberCounts
+
+	// Snapshot base state for two-phase commit
+	m.state.GroupsSnapshot = make([]*auth.GroupInfo, len(groups))
+	for i, g := range groups {
+		cp := *g
+		m.state.GroupsSnapshot[i] = &cp
+	}
+	m.state.GroupsPendingOps = nil
+}
+
+// groupsNextTempID returns the next negative temporary ID for in-memory creates.
+func (m *WizardModel) groupsNextTempID() int64 {
+	min := int64(-1)
+	for _, op := range m.state.GroupsPendingOps {
+		if op.OpType == 0 && op.ID < min {
+			min = op.ID
+		}
+	}
+	return min - 1
+}
+
+// effectiveGroupsList applies pending ops on the snapshot and returns the result sorted by name.
+func (m *WizardModel) effectiveGroupsList() []*auth.GroupInfo {
+	// Build a map from snapshot for O(1) lookup
+	base := make(map[int64]*auth.GroupInfo)
+	for _, g := range m.state.GroupsSnapshot {
+		cp := *g
+		base[cp.ID] = &cp
+	}
+
+	// Collect final IDs and their resolved GroupInfo
+	result := make(map[int64]*auth.GroupInfo)
+	deleted := make(map[int64]bool)
+
+	for _, op := range m.state.GroupsPendingOps {
+		switch op.OpType {
+		case 0: // create
+			result[op.ID] = &auth.GroupInfo{
+				ID:             op.ID,
+				Name:           op.Name,
+				Profile:        op.Profile,
+				PriorityWeight: op.PriorityWeight,
+				MaxConcurrency: op.MaxConcurrency,
+			}
+		case 1: // update
+			if existing, ok := result[op.ID]; ok {
+				existing.Profile = op.Profile
+				existing.PriorityWeight = op.PriorityWeight
+				existing.MaxConcurrency = op.MaxConcurrency
+			} else if snap, ok := base[op.ID]; ok {
+				cp := *snap
+				cp.Profile = op.Profile
+				cp.PriorityWeight = op.PriorityWeight
+				cp.MaxConcurrency = op.MaxConcurrency
+				result[op.ID] = &cp
+			}
+		case 2: // delete
+			delete(result, op.ID)
+			deleted[op.ID] = true
+		}
+	}
+
+	// Add snapshot items not touched by any op
+	for id, g := range base {
+		if _, wasDeleted := deleted[id]; !wasDeleted {
+			if _, hasOp := result[id]; !hasOp {
+				cp := *g
+				result[id] = &cp
+			}
+		}
+	}
+
+	// Sort by name
+	out := make([]*auth.GroupInfo, 0, len(result))
+	for _, g := range result {
+		out = append(out, g)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// groupsHavePendingChanges returns true if there are staged group operations.
+func (m *WizardModel) groupsHavePendingChanges() bool {
+	return len(m.state.GroupsPendingOps) > 0
+}
+
+// flushGroupChanges writes all pending group operations to SQLite and clears the list.
+func (m *WizardModel) flushGroupChanges(ks *auth.KeyStore) error {
+	for _, op := range m.state.GroupsPendingOps {
+		switch op.OpType {
+		case 0: // create
+			if _, err := ks.CreateGroup(op.Name, op.Profile, op.PriorityWeight, op.MaxConcurrency); err != nil {
+				return fmt.Errorf("create group %q: %w", op.Name, err)
+			}
+		case 1: // update
+			if err := ks.UpdateGroup(op.ID, op.Profile, op.PriorityWeight, op.MaxConcurrency); err != nil {
+				return fmt.Errorf("update group (id %d): %w", op.ID, err)
+			}
+		case 2: // delete
+			if err := ks.DeleteGroup(op.ID); err != nil {
+				return fmt.Errorf("delete group (id %d): %w", op.ID, err)
+			}
+		}
+	}
+	m.state.GroupsPendingOps = nil
+	return nil
+}
+
+// discardGroupChanges clears pending ops and rebuilds GroupsList from the snapshot.
+func (m *WizardModel) discardGroupChanges() {
+	m.state.GroupsPendingOps = nil
+	if m.state.GroupsSnapshot != nil {
+		m.state.GroupsList = make([]*auth.GroupInfo, len(m.state.GroupsSnapshot))
+		for i, g := range m.state.GroupsSnapshot {
+			cp := *g
+			m.state.GroupsList[i] = &cp
+		}
+		sort.Slice(m.state.GroupsList, func(i, j int) bool {
+			return m.state.GroupsList[i].Name < m.state.GroupsList[j].Name
+		})
+		m.state.GroupsCursor = 0
+	} else {
+		m.state.GroupsList = nil
+	}
+}
+
+// refreshGroupsDisplay rebuilds GroupsList from effective state and clamps cursor.
+func (m *WizardModel) refreshGroupsDisplay() {
+	m.state.GroupsList = m.effectiveGroupsList()
+	if m.state.GroupsCursor >= len(m.state.GroupsList) {
+		m.state.GroupsCursor = 0
+		if len(m.state.GroupsList) > 0 {
+			m.state.GroupsCursor = len(m.state.GroupsList) - 1
+		}
+	}
 }
 
 // loadGroupProfileNames reads profile names from config into a sorted slice.
@@ -4607,6 +4753,11 @@ func (m *WizardModel) handleMultiUserInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 func (m *WizardModel) handleMultiUserSave() (tea.Model, tea.Cmd) {
 	// Settings stay in-memory; written to SQLite on "Save & Exit"
 	m.state.HasChanges = true
+	// Update snapshot so Cancel restores to these values
+	m.state.MultiUserOrigEnabled = m.state.MultiUserEnabled
+	m.state.MultiUserOrigGlobalMax = m.state.MultiUserGlobalMax
+	m.state.MultiUserOrigWREDMin = m.state.MultiUserWREDMin
+	m.state.MultiUserOrigWREDMax = m.state.MultiUserWREDMax
 	m.state.ProviderCursor = m.state.MainMenuCursor
 	m.state.ErrorMessage = ""
 	m.state.CurrentScreen = ScreenMainMenu
@@ -4619,6 +4770,7 @@ func (m *WizardModel) handleMultiUserCancel() (tea.Model, tea.Cmd) {
 	m.state.MultiUserGlobalMax = m.state.MultiUserOrigGlobalMax
 	m.state.MultiUserWREDMin = m.state.MultiUserOrigWREDMin
 	m.state.MultiUserWREDMax = m.state.MultiUserOrigWREDMax
+	m.discardGroupChanges()
 	m.state.ProviderCursor = m.state.MainMenuCursor
 	m.state.ErrorMessage = ""
 	m.state.CurrentScreen = ScreenMainMenu
@@ -4678,23 +4830,42 @@ func (m *WizardModel) handleGroupsDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	selected := m.state.GroupsList[m.state.GroupsCursor]
+
+	// Refuse to delete groups that have members
+	if m.state.GroupsMemberCounts != nil && m.state.GroupsMemberCounts[selected.ID] > 0 {
+		m.state.ErrorMessage = "Cannot delete group with assigned keys"
+		return m, nil
+	}
+
 	m.state.ShowConfirm = true
 	m.state.ConfirmCursor = 1 // Default to No (destructive)
 	m.state.ConfirmMessage = fmt.Sprintf("Delete group \"%s\"?", selected.Name)
 	groupID := selected.ID
 	m.state.ConfirmAction = func() bool {
-		db, err := openWizardDB()
-		if err != nil {
-			m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
-			return false
+		// If a pending create exists for this ID, just remove it (never hit SQLite)
+		created := false
+		for i, op := range m.state.GroupsPendingOps {
+			if op.OpType == 0 && op.ID == groupID {
+				m.state.GroupsPendingOps = append(m.state.GroupsPendingOps[:i], m.state.GroupsPendingOps[i+1:]...)
+				created = true
+				break
+			}
 		}
-		defer db.Close()
-		ks := auth.NewKeyStore(db)
-		if err := ks.DeleteGroup(groupID); err != nil {
-			m.state.ErrorMessage = fmt.Sprintf("Failed to delete: %v", err)
-			return false
+		if !created {
+			// Remove any pending update for this ID (superseded by delete)
+			for i := len(m.state.GroupsPendingOps) - 1; i >= 0; i-- {
+				if m.state.GroupsPendingOps[i].OpType == 1 && m.state.GroupsPendingOps[i].ID == groupID {
+					m.state.GroupsPendingOps = append(m.state.GroupsPendingOps[:i], m.state.GroupsPendingOps[i+1:]...)
+				}
+			}
+			// Append delete op
+			m.state.GroupsPendingOps = append(m.state.GroupsPendingOps, PendingGroupOp{
+				OpType: 2,
+				ID:     groupID,
+			})
 		}
-		m.loadGroupsData()
+		m.state.HasChanges = true
+		m.refreshGroupsDisplay()
 		return false
 	}
 	return m, nil
@@ -4751,7 +4922,7 @@ func (m *WizardModel) handleCreateGroupInput(msg tea.KeyMsg) (tea.Model, tea.Cmd
 
 	switch m.focusedField {
 	case 0: // Group name (locked when editing)
-		if m.state.EditingGroupID > 0 {
+		if m.state.EditingGroupID != 0 {
 			return m, nil
 		}
 		if msg.String() == "backspace" || msg.String() == "delete" || msg.String() == "del" {
@@ -4854,36 +5025,57 @@ func (m *WizardModel) handleCreateGroupSave() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	db, err := openWizardDB()
-	if err != nil {
-		m.state.ErrorMessage = fmt.Sprintf("Failed to open DB: %v", err)
-		return m, nil
-	}
-	defer db.Close()
-	ks := auth.NewKeyStore(db)
+	name := strings.TrimSpace(m.state.NewGroupName)
+	profile := strings.TrimSpace(m.state.NewGroupProfile)
 
-	if m.state.EditingGroupID > 0 {
-		// Update existing group
-		if err := ks.UpdateGroup(m.state.EditingGroupID, strings.TrimSpace(m.state.NewGroupProfile), priority, maxConc); err != nil {
-			m.state.ErrorMessage = fmt.Sprintf("Failed to update: %v", err)
-			return m, nil
+	if m.state.EditingGroupID != 0 {
+		// Update path — find existing pending op with same ID and update in-place
+		updated := false
+		for i := range m.state.GroupsPendingOps {
+			if m.state.GroupsPendingOps[i].ID == m.state.EditingGroupID && (m.state.GroupsPendingOps[i].OpType == 0 || m.state.GroupsPendingOps[i].OpType == 1) {
+				m.state.GroupsPendingOps[i].Profile = profile
+				m.state.GroupsPendingOps[i].PriorityWeight = priority
+				m.state.GroupsPendingOps[i].MaxConcurrency = maxConc
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			// No existing pending op — append an update
+			m.state.GroupsPendingOps = append(m.state.GroupsPendingOps, PendingGroupOp{
+				OpType:         1,
+				ID:             m.state.EditingGroupID,
+				Profile:        profile,
+				PriorityWeight: priority,
+				MaxConcurrency: maxConc,
+			})
 		}
 	} else {
-		// Create new group
-		_, err := ks.CreateGroup(
-			strings.TrimSpace(m.state.NewGroupName),
-			strings.TrimSpace(m.state.NewGroupProfile),
-			priority,
-			maxConc,
-		)
-		if err != nil {
-			m.state.ErrorMessage = fmt.Sprintf("Failed to create: %v", err)
-			return m, nil
+		// Create path — check duplicate name against effective list
+		for _, g := range m.effectiveGroupsList() {
+			if g.Name == name {
+				m.state.ErrorMessage = "A group with this name already exists"
+				return m, nil
+			}
 		}
+		tempID := m.groupsNextTempID()
+		m.state.GroupsPendingOps = append(m.state.GroupsPendingOps, PendingGroupOp{
+			OpType:         0,
+			ID:             tempID,
+			Name:           name,
+			Profile:        profile,
+			PriorityWeight: priority,
+			MaxConcurrency: maxConc,
+		})
+		// Set member count for new group
+		if m.state.GroupsMemberCounts == nil {
+			m.state.GroupsMemberCounts = make(map[int64]int)
+		}
+		m.state.GroupsMemberCounts[tempID] = 0
 	}
 
-	// Reload and go back to groups list
-	m.loadGroupsData()
+	m.state.HasChanges = true
+	m.refreshGroupsDisplay()
 	m.state.NewGroupName = ""
 	m.state.NewGroupProfile = ""
 	m.state.NewGroupPriority = ""
@@ -4949,15 +5141,19 @@ func (m *WizardModel) renderMultiUser() string {
 	}
 
 	// Manage Groups button
-	manageBtn := ButtonStyle.Render(" Manage Groups \u2192 ")
+	manageGroupsText := " Manage Groups \u2192 "
+	if m.groupsHavePendingChanges() {
+		manageGroupsText = " * Manage Groups \u2192 "
+	}
+	manageBtn := ButtonStyle.Render(manageGroupsText)
 	if m.focusedField == 4 {
-		manageBtn = ButtonActiveStyle.Render(" Manage Groups \u2192 ")
+		manageBtn = ButtonActiveStyle.Render(manageGroupsText)
 	}
 
 	// Save button (green)
-	saveBtn := ButtonSaveStyle.Render(" Save ")
+	saveBtn := ButtonSaveStyle.Render(" Ok ")
 	if m.focusedField == 5 {
-		saveBtn = ButtonSaveActiveStyle.Render(" Save ")
+		saveBtn = ButtonSaveActiveStyle.Render(" Ok ")
 	}
 
 	// Cancel button (red)
@@ -5037,7 +5233,7 @@ func (m *WizardModel) renderGroups() string {
 		title, m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[a] Add   [e] Edit   [\u232b] Delete   [Enter] Edit   [Esc] Back"),
+		HelpTextStyle.Width(m.contentWidth()).Render("[a] Add   [\u232b] Delete   [Enter] Edit   [Esc] Back"),
 	)
 
 	if m.state.ErrorMessage != "" {
@@ -5057,7 +5253,7 @@ func (m *WizardModel) renderGroups() string {
 
 func (m *WizardModel) renderCreateGroup() string {
 	titleText := "Create Group"
-	if m.state.EditingGroupID > 0 {
+	if m.state.EditingGroupID != 0 {
 		titleText = "Edit Group"
 	}
 	title := TitleStyle.Width(m.contentWidth()).Render(titleText)
@@ -5068,11 +5264,11 @@ func (m *WizardModel) renderCreateGroup() string {
 
 	// Group Name field (locked when editing)
 	nameLabel := "Group Name:"
-	if m.state.EditingGroupID > 0 {
+	if m.state.EditingGroupID != 0 {
 		nameLabel = "Group Name: (locked)"
 	}
 	lines = append(lines, nameLabel)
-	if m.state.EditingGroupID > 0 {
+	if m.state.EditingGroupID != 0 {
 		lines = append(lines, InputFieldDisabledStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupName))
 	} else if m.focusedField == 0 {
 		lines = append(lines, InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(m.state.NewGroupName+"_"))
@@ -5128,13 +5324,17 @@ func (m *WizardModel) renderCreateGroup() string {
 	lines = append(lines, "")
 
 	// Buttons
-	saveBtn := ButtonStyle.Render(" Save ")
-	cancelBtn := ButtonStyle.Render(" Cancel ")
+	saveLabel := " Save "
+	if m.state.EditingGroupID != 0 {
+		saveLabel = " Ok "
+	}
+	saveBtn := ButtonSaveStyle.Render(saveLabel)
+	cancelBtn := ButtonCancelStyle.Render(" Cancel ")
 	if m.focusedField == 4 {
-		saveBtn = ButtonPrimaryStyle.Render(" Save ")
+		saveBtn = ButtonSaveActiveStyle.Render(saveLabel)
 	}
 	if m.focusedField == 5 {
-		cancelBtn = ButtonDangerStyle.Render(" Cancel ")
+		cancelBtn = ButtonCancelActiveStyle.Render(" Cancel ")
 	}
 	buttons := lipgloss.JoinHorizontal(lipgloss.Center, "  ", saveBtn, "    ", cancelBtn, "  ")
 	lines = append(lines, m.fullWidth(buttons))
@@ -5144,14 +5344,22 @@ func (m *WizardModel) renderCreateGroup() string {
 		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render(m.state.ErrorMessage))
 	}
 
+	header := title
+	if m.state.EditingGroupID == 0 {
+		header = title + "  " + backHint
+	}
+	helpText := "[Tab] Next   [Enter] Confirm   [Esc] Cancel"
+	if m.state.EditingGroupID != 0 {
+		helpText = "[Tab] Next   [Enter] Confirm   [Esc] Back"
+	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		m.fullWidth(title+"  "+backHint),
+		m.fullWidth(header),
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
 		m.divider(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next   [Enter] Confirm   [Esc] Cancel"),
+		HelpTextStyle.Width(m.contentWidth()).Render(helpText),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)

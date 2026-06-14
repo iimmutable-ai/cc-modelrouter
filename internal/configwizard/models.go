@@ -159,10 +159,18 @@ type WizardState struct {
 	MultiUserWREDMin   string // WRED min depth
 	MultiUserWREDMax   string // WRED max depth
 
+	// Multi-User screen original values (for Cancel)
+	MultiUserOrigEnabled   bool
+	MultiUserOrigGlobalMax string
+	MultiUserOrigWREDMin   string
+	MultiUserOrigWREDMax   string
+
 	// Groups list screen state
 	GroupsList         []*auth.GroupInfo // populated from DB
 	GroupsCursor       int              // selected group in list
 	GroupsMemberCounts map[int64]int     // group ID → member count
+	GroupsSnapshot      []*auth.GroupInfo // base state from SQLite (set by loadGroupsData)
+	GroupsPendingOps    []PendingGroupOp  // staged create/update/delete ops
 
 	// Create/Edit group form state
 	NewGroupName            string   // group name
@@ -172,7 +180,19 @@ type WizardState struct {
 	NewGroupProfileNames    []string // available profile names (sorted)
 	ShowGroupProfileDropdown bool     // show profile dropdown
 	NewGroupProfileDropdownCursor int // cursor in profile dropdown
-	EditingGroupID          int64    // 0=create, >0=edit
+	EditingGroupID          int64    // 0=create, >0=edit, <0=editing in-memory created group
+}
+
+// PendingGroupOp represents a staged group change not yet written to SQLite.
+// OpType: 0=create, 1=update, 2=delete.
+// For creates, ID is a negative temporary ID assigned in memory.
+type PendingGroupOp struct {
+	OpType         int
+	ID             int64
+	Name           string
+	Profile        string
+	PriorityWeight float64
+	MaxConcurrency int
 }
 
 // ProviderPreset defines preset provider configurations.
@@ -332,6 +352,15 @@ func (s *WizardState) HasUnsavedChanges() bool {
 		return s.HasChanges
 	}
 	if !configsEqual(s.Config, s.OriginalCfg) {
+		return true
+	}
+	if len(s.GroupsPendingOps) > 0 {
+		return true
+	}
+	if s.MultiUserEnabled != s.MultiUserOrigEnabled ||
+		s.MultiUserGlobalMax != s.MultiUserOrigGlobalMax ||
+		s.MultiUserWREDMin != s.MultiUserOrigWREDMin ||
+		s.MultiUserWREDMax != s.MultiUserOrigWREDMax {
 		return true
 	}
 	// Also check if resolved API keys changed (env var templates stay the same

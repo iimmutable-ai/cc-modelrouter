@@ -31,13 +31,17 @@ type Config struct {
 	Providers map[string]ProviderConfig `json:"providers"`
 	Router    RouterConfig              `json:"router"`
 	Logging   LoggingConfig             `json:"logging,omitempty"`
+	// MultiUser is deprecated — multi-user data is now stored in SQLite (usage.db).
+	// Kept for backward compatibility when loading old config files.
+	// On first load, settings are migrated to SQLite and this field is cleared.
 	MultiUser MultiUserConfig           `json:"multiUser,omitempty"`
 	// Profiles is kept at Config level for backward compatibility when loading old config files.
 	// It is migrated to Router.Profiles during loading and always nil after that.
 	Profiles map[string]ProfileConfig `json:"profiles,omitempty"` // Legacy location - migrated to Router.Profiles
 }
 
-// MultiUserConfig controls multi-user authentication and QoS.
+// MultiUserConfig is deprecated — settings now live in SQLite (multi_user_settings table).
+// Kept for loading legacy config files during one-time migration.
 type MultiUserConfig struct {
 	Enabled        bool          `json:"enabled,omitempty"`
 	GlobalMaxConc  int           `json:"globalMaxConcurrency,omitempty"` // 0 = auto (100)
@@ -46,7 +50,8 @@ type MultiUserConfig struct {
 	Groups         []GroupConfig `json:"groups,omitempty"`
 }
 
-// GroupConfig defines a user group with profile mapping and QoS settings.
+// GroupConfig is deprecated — groups now live in SQLite (user_groups table).
+// Kept for loading legacy config files during one-time migration.
 type GroupConfig struct {
 	Name           string  `json:"name"`
 	Profile        string  `json:"profile"`
