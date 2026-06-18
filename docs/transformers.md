@@ -75,7 +75,6 @@ Body:
 
 **Note:** Use this transformer for:
 - Direct OpenAI API
-- Alibaba Qwen (DashScope)
 - Any OpenAI-compatible API
 
 ### OpenRouterTransformer
@@ -140,18 +139,18 @@ Body:
 - Tools → `functionDeclarations`
 - Images → `inlineData`
 
-### Qwen (Alibaba DashScope)
+### Aliyun DashScope (alicloud)
 
-Qwen API uses Anthropic-compatible format. Use the **Anthropic Transformer** (see above).
+The alicloud preset uses Anthropic-compatible format. Use the **GLM Transformer** (see below).
 
 **Configuration:**
 ```json
 {
-  "qwen": {
+  "alicloud": {
     "apiKey": "${CCROUTER_DASHSCOPE_API_KEY}",
     "baseURL": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-    "transformer": "anthropic",
-    "models": ["qwen-turbo", "qwen-plus"]
+    "transformer": "glm_anthropic",
+    "models": ["MiniMax-M2.5", "kimi-k2.5", "qwen3-coder-plus", "glm-5", "glm-4.7", "qwen3.7-plus", "glm-5.1", "glm-5.2", "kimi-k2.6"]
   }
 }
 ```

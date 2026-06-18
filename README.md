@@ -134,10 +134,11 @@ See [docs/configuration.md](docs/configuration.md) for the full configuration re
 
 | Provider | Type | Models |
 |----------|------|--------|
-| **Zhipu GLM** | Direct | glm-5.1, glm-5-turbo, glm-5v-turbo, glm-4.7, glm-4.6v |
-| **Anthropic** | Direct | claude-opus-4.6, claude-opus-4.5, claude-sonnet-4.6, claude-haiku-4.5 |
-| **OpenRouter** | Aggregator | openai/gpt-5.4, openai/gpt-5.4-mini, openai/gpt-5.3-codex, google/gemini-2.5-flash, google/gemini-2.5-pro, anthropic/claude-opus-4.6, anthropic/claude-sonnet-4.6 |
-| **Aliyun DashScope** | Aggregator | MiniMax-M2.5, kimi-k2.5, qwen3-coder-plus, glm-5, glm-4.7 |
+| **Zhipu GLM** (bigmodel) | Direct | glm-4.6v, glm-4.7, glm-5-turbo, glm-5v-turbo, glm-5.1, glm-5.2 |
+| **Anthropic** | Direct | claude-haiku-4.5, claude-sonnet-4.6, claude-opus-4.5, claude-opus-4.6 |
+| **OpenRouter** | Aggregator | openai/gpt-5.4, openai/gpt-5.4-mini, openai/gpt-5.3-codex, google/gemini-2.5-flash, google/gemini-2.5-pro |
+| **Aliyun DashScope** (alicloud) | Aggregator | MiniMax-M2.5, kimi-k2.5, qwen3-coder-plus, glm-5, glm-4.7, qwen3.7-plus, glm-5.1, glm-5.2, kimi-k2.6 |
+| **Google Gemini** | Direct | gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash |
 
 OpenRouter provides access to Anthropic, OpenAI, and Google models through a single API key.
 

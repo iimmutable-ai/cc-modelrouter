@@ -381,7 +381,7 @@ Add `"disableKeepAlives": true` to the provider configuration:
   "bigmodel": {
     "apiKey": "${CCROUTER_BIGMODEL_API_KEY}",
     "baseURL": "https://open.bigmodel.cn/api/anthropic",
-    "models": ["glm-4.7", "glm-4.5-air"],
+    "models": ["glm-4.7", "glm-5-turbo"],
     "disableKeepAlives": true
   }
 }

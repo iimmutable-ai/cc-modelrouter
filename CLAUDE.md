@@ -303,9 +303,9 @@ Router automatically selects routes based on request characteristics (priority o
 
 | Priority | Route | Trigger | Detection Method |
 |----------|-------|---------|-----------------|
-| 1 | `background` | Background agent request | `IsBackground` flag on request |
-| 2 | `subagent` | Subagent task | Tool names contain "subagent" or prompt contains "subagent"/"delegate to agent" |
-| 3 | `review` | Review task | Prompt contains "/review", "code review", or starts with "review " |
+| 1 | `background` | Background agent request | Model name contains both `claude` and `haiku` (case-insensitive) |
+| 2 | `subagent` | Subagent task | HTTP headers `X-Claude-Code-Agent-Id` / `X-Claude-Code-Parent-Agent-Id`; fallback: tool name contains "subagent", or last user message contains "subagent"/"delegate to agent" |
+| 3 | `review` | Review task | Last user message contains "/review", "code review", "review this", "review the", or starts with "review " |
 | 4 | `ultrathink` | Maximum thinking | `budget_tokens >= 32,000` |
 | 5 | `thinkMore` | Enhanced thinking | `budget_tokens >= 10,000` |
 | 6 | `think` | Basic thinking | `budget_tokens >= 4,000` |

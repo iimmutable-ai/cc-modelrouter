@@ -538,14 +538,16 @@ ThinkLevelHighest = 32000  // "ultrathink"
 
 Routes are checked in this priority order:
 
-1. `background` - Claude Code uses Haiku models for background agents
-2. `ultrathink` - Highest thinking level (budget_tokens >= 32000)
-3. `thinkMore` - Middle thinking level (budget_tokens >= 10000)
-4. `think` - Basic thinking level (budget_tokens >= 4000)
-5. `image` - Request contains image content
-6. `webSearch` - Tool names contain "web" or "search"
-7. `longContext` - Token count > 60,000
-8. `default` - Fallback for all other requests
+1. `background` - Model name contains both `claude` and `haiku` (Claude Code uses Haiku for background agents)
+2. `subagent` - HTTP headers `X-Claude-Code-Agent-Id` / `X-Claude-Code-Parent-Agent-Id`; fallback to subagent keywords in tools/last user message
+3. `review` - Last user message contains "/review", "code review", "review this", "review the", or starts with "review "
+4. `ultrathink` - Highest thinking level (budget_tokens >= 32000)
+5. `thinkMore` - Middle thinking level (budget_tokens >= 10000)
+6. `think` - Basic thinking level (budget_tokens >= 4000)
+7. `image` - Request contains image content
+8. `webSearch` - Tool names contain "web" or "search"
+9. `longContext` - Token count > 60,000
+10. `default` - Fallback for all other requests
 
 ### Fallback Behavior
 

@@ -121,9 +121,9 @@ Determines which provider and model to use for each request.
 **Route Detection (priority order — checked top to bottom):**
 | Priority | Route | Trigger Condition | Detection Method |
 |----------|-------|-------------------|------------------|
-| 1 | `background` | Background agent | `IsBackground` flag on request |
-| 2 | `subagent` | Subagent task | Prompt contains "subagent"/"delegate to agent" |
-| 3 | `review` | Review task | Prompt contains "/review", "code review", or starts with "review " |
+| 1 | `background` | Background agent | Model name contains both `claude` and `haiku` (case-insensitive) |
+| 2 | `subagent` | Subagent task | HTTP headers `X-Claude-Code-Agent-Id` / `X-Claude-Code-Parent-Agent-Id`; fallback: tool name contains "subagent", or last user message contains "subagent"/"delegate to agent" |
+| 3 | `review` | Review task | Last user message contains "/review", "code review", "review this", "review the", or starts with "review " |
 | 4 | `ultrathink` | Highest thinking | `budget_tokens >= 32,000` |
 | 5 | `thinkMore` | Middle thinking | `budget_tokens >= 10,000` |
 | 6 | `think` | Basic thinking | `budget_tokens >= 4,000` |

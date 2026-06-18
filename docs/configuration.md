@@ -193,7 +193,7 @@ If you prefer, you can combine all OpenRouter models into a single provider:
     "transformer": "openrouter",
     "models": [
       "anthropic/claude-haiku-4.5",
-      "anthropic/claude-sonnet-4.5",
+      "anthropic/claude-sonnet-4.6",
       "anthropic/claude-opus-4.5",
       "google/gemini-2.5-flash",
       "google/gemini-2.5-pro"
@@ -217,21 +217,22 @@ If you prefer, you can combine all OpenRouter models into a single provider:
 - **Transformer**: `gemini` (native format)
 - **Auth**: Query parameter `key=<api-key>`
 
-#### Alibaba Qwen (DashScope)
+#### Aliyun DashScope (alicloud)
 
 ```json
 {
-  "qwen": {
+  "alicloud": {
     "apiKey": "${CCROUTER_DASHSCOPE_API_KEY}",
     "baseURL": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-    "transformer": "openai",
-    "models": ["qwen-turbo", "qwen-plus"]
+    "transformer": "glm_anthropic",
+    "models": ["MiniMax-M2.5", "kimi-k2.5", "qwen3-coder-plus", "glm-5", "glm-4.7", "qwen3.7-plus", "glm-5.1", "glm-5.2", "kimi-k2.6"]
   }
 }
 ```
 
-- **Transformer**: `openai` (OpenAI-compatible format)
+- **Transformer**: `glm_anthropic` (Anthropic-compatible)
 - **Auth**: `Authorization: Bearer`
+- **Note**: This preset is auto-suggested by `ccrouter config` when you name a provider `alicloud`.
 
 #### Zhipu GLM (BigModel)
 
@@ -240,7 +241,7 @@ If you prefer, you can combine all OpenRouter models into a single provider:
   "bigmodel": {
     "apiKey": "${CCROUTER_BIGMODEL_API_KEY}",
     "baseURL": "https://open.bigmodel.cn/api/anthropic",
-    "models": ["glm-4.7", "glm-4.5-air", "glm-4.6v"]
+    "models": ["glm-4.6v", "glm-4.7", "glm-5-turbo", "glm-5v-turbo", "glm-5.1", "glm-5.2"]
   }
 }
 ```
@@ -255,7 +256,7 @@ If you prefer, you can combine all OpenRouter models into a single provider:
   "anthropic": {
     "apiKey": "${CCROUTER_ANTHROPIC_API_KEY}",
     "baseURL": "https://api.anthropic.com",
-    "models": ["claude-sonnet-4-20250514"]
+    "models": ["claude-haiku-4.5", "claude-sonnet-4.6", "claude-opus-4.5", "claude-opus-4.6"]
   }
 }
 ```
@@ -269,11 +270,11 @@ If you prefer, you can combine all OpenRouter models into a single provider:
 {
   "router": {
     "routes": {
-      "default": "openrouter:anthropic/claude-sonnet-4",
-      "background": "bigmodel:glm-4.5-air",
-      "think": "openrouter:anthropic/claude-sonnet-4",
-      "thinkMore": "openrouter:anthropic/claude-sonnet-4",
-      "ultrathink": "openrouter:anthropic/claude-opus-4",
+      "default": "openrouter:anthropic/claude-sonnet-4.6",
+      "background": "bigmodel:glm-5-turbo",
+      "think": "openrouter:anthropic/claude-sonnet-4.6",
+      "thinkMore": "openrouter:anthropic/claude-sonnet-4.6",
+      "ultrathink": "openrouter:anthropic/claude-opus-4.6",
       "longContext": "gemini:gemini-2.5-pro",
       "webSearch": "gemini:gemini-2.5-pro",
       "image": "bigmodel:glm-4.6v"
@@ -288,9 +289,9 @@ If you prefer, you can combine all OpenRouter models into a single provider:
 
 | Priority | Route | Description | Trigger | Detection Method |
 |----------|-------|-------------|---------|------------------|
-| 1 | `background` | Background tasks | Background agent request | `IsBackground` flag on request |
-| 2 | `subagent` | Subagent tasks | Prompt contains "subagent"/"delegate to agent" | Message content analysis |
-| 3 | `review` | Review tasks | Prompt contains "/review", "code review", or starts with "review " | Message content analysis |
+| 1 | `background` | Background tasks | Background agent request | Model name contains both `claude` and `haiku` (case-insensitive) |
+| 2 | `subagent` | Subagent tasks | Subagent dispatch (Claude Code v2.1.139+) | HTTP headers `X-Claude-Code-Agent-Id` / `X-Claude-Code-Parent-Agent-Id`; fallback: tool name contains "subagent", or last user message contains "subagent"/"delegate to agent" |
+| 3 | `review` | Review tasks | Review keyword in last user message | Last user message contains "/review", "code review", "review this", "review the", or starts with "review " |
 | 4 | `ultrathink` | Maximum thinking | "ultrathink", "think harder" | `budget_tokens >= 32,000` |
 | 5 | `thinkMore` | Enhanced thinking | "think hard", "think more" | `budget_tokens >= 10,000` |
 | 6 | `think` | Basic thinking | "think" trigger phrase | `budget_tokens >= 4,000` |
@@ -370,7 +371,7 @@ Profiles are stored under `router.profiles` in the config file. Top-level `"prof
         "description": "Standard routing with Claude models",
         "routes": {
           "default": "openrouter:anthropic/claude-sonnet-4",
-          "background": "bigmodel:glm-4.5-air",
+          "background": "bigmodel:glm-5-turbo",
           "think": "openrouter:anthropic/claude-sonnet-4",
           "ultrathink": "openrouter:anthropic/claude-opus-4"
         }
@@ -380,7 +381,7 @@ Profiles are stored under `router.profiles` in the config file. Top-level `"prof
         "description": "Use cheaper models for cost savings",
         "routes": {
           "default": "bigmodel:glm-4.7",
-          "background": "bigmodel:glm-4.5-air",
+          "background": "bigmodel:glm-5-turbo",
           "think": "bigmodel:glm-4.7",
           "ultrathink": "openrouter:anthropic/claude-sonnet-4"
         }
@@ -607,13 +608,13 @@ ccrouter groups delete <id>
     "bigmodel": {
       "apiKey": "${CCROUTER_BIGMODEL_API_KEY}",
       "baseURL": "https://open.bigmodel.cn/api/anthropic",
-      "models": ["glm-4.7", "glm-4.5-air", "glm-4.6v"],
+      "models": ["glm-4.6v", "glm-4.7", "glm-5-turbo", "glm-5v-turbo", "glm-5.1", "glm-5.2"],
       "transformer": "glm_anthropic"
     },
     "openrouter-anthropic": {
       "apiKey": "${CCROUTER_OPENROUTER_API_KEY}",
       "baseURL": "https://openrouter.ai/api",
-      "models": ["anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.5", "anthropic/claude-opus-4.5"],
+      "models": ["anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.5"],
       "transformer": "openrouter"
     },
     "openrouter-openai": {
@@ -627,20 +628,20 @@ ccrouter groups delete <id>
       "baseURL": "https://generativelanguage.googleapis.com/v1beta",
       "models": ["gemini-2.5-pro", "gemini-2.0-flash"]
     },
-    "aliyun": {
-      "apiKey": "${CCROUTER_ALIYUN_API_KEY}",
+    "alicloud": {
+      "apiKey": "${CCROUTER_DASHSCOPE_API_KEY}",
       "baseURL": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-      "models": ["glm-5", "glm-4.7", "MiniMax-M2.5"],
+      "models": ["MiniMax-M2.5", "kimi-k2.5", "qwen3-coder-plus", "glm-5", "glm-4.7", "qwen3.7-plus", "glm-5.1", "glm-5.2", "kimi-k2.6"],
       "transformer": "glm_anthropic"
     }
   },
   "router": {
     "routes": {
-      "default": "bigmodel:glm-4.7;aliyun:glm-4.7;openrouter-anthropic:anthropic/claude-sonnet-4.5",
-      "background": "bigmodel:glm-4.5-air;aliyun:glm-4.5-air;openrouter-openai:google/gemini-2.5-flash;openrouter-anthropic:anthropic/claude-haiku-4.5",
-      "think": "bigmodel:glm-4.7;aliyun:glm-4.7;openrouter-anthropic:anthropic/claude-sonnet-4.5",
-      "thinkMore": "aliyun:glm-5;openrouter-anthropic:anthropic/claude-opus-4.5",
-      "longContext": "aliyun:glm-5;openrouter-openai:google/gemini-2.5-pro"
+      "default": "bigmodel:glm-4.7;alicloud:glm-4.7;openrouter-anthropic:anthropic/claude-sonnet-4.6",
+      "background": "bigmodel:glm-5-turbo;alicloud:glm-5;openrouter-openai:google/gemini-2.5-flash;openrouter-anthropic:anthropic/claude-haiku-4.5",
+      "think": "bigmodel:glm-4.7;alicloud:glm-4.7;openrouter-anthropic:anthropic/claude-sonnet-4.6",
+      "thinkMore": "alicloud:glm-5;openrouter-anthropic:anthropic/claude-opus-4.5",
+      "longContext": "alicloud:glm-5;openrouter-openai:google/gemini-2.5-pro"
     },
     "maxRetries": 2,
     "retryDelay": "500ms"
