@@ -2,9 +2,29 @@
 
 ## Installation
 
+**Recommended (curl):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/scripts/install.sh | bash
+```
+
+**Alternative (Go users):**
+
 ```bash
 go install github.com/iimmutable/cc-modelrouter/cmd/ccrouter@latest
 ```
+
+**From source:**
+
+```bash
+git clone https://github.com/iimmutable/cc-modelrouter
+cd cc-modelrouter
+make install
+```
+
+> **Note:** The first `ccrouter config` run downloads the latest provider presets from GitHub. To refresh presets later, delete `~/.cc-modelrouter/provider-presets.json` and re-run `ccrouter config`.
+>
+> **Install flags:** `bash install.sh --version vX.Y.Z -d /custom/path`
 
 ## Global Options
 
@@ -272,7 +292,7 @@ ccrouter config
 **Description:**
 - Launches a full-screen terminal UI for managing all configuration
 - Menu-driven interface for providers, routes, server, and logging settings
-- Provider presets with autocomplete (alicloud, anthropic, bigmodel, openrouter, openrouter-openai, openrouter-anthropic)
+- Provider presets with autocomplete (alicloud, anthropic, bigmodel, openrouter, openrouter-openai, openrouter-anthropic, gemini) — see [Provider Presets](#provider-presets) below
 - Model autocomplete suggestions when adding providers
 - Connection testing for providers
 - View and export current configuration
@@ -781,3 +801,71 @@ The `ccrouter code` command automatically sets:
 | 1 | General error |
 | 2 | Configuration error |
 | 3 | Server startup error |
+
+## Provider Presets
+
+The configuration wizard offers provider presets (base URL, transformer, and
+common models) for autocomplete when adding a provider. Presets are loaded
+from JSON — not baked into the binary.
+
+### Auto-fetch on first run
+
+When you run `ccrouter config` and `~/.cc-modelrouter/provider-presets.json`
+does not exist, the wizard fetches the canonical presets from GitHub:
+
+```
+https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/presets/provider-presets.json
+```
+
+The file is written to `~/.cc-modelrouter/provider-presets.json` with `0600`
+permissions. On the next run the file already exists, so no network access
+is needed.
+
+To refresh presets later:
+
+```bash
+rm ~/.cc-modelrouter/provider-presets.json
+ccrouter config
+```
+
+### Preset layering
+
+Presets are merged from three layers (later layers override per key):
+
+| Layer | Path | Notes |
+|-------|------|-------|
+| Fetched defaults | `~/.cc-modelrouter/provider-presets.json` | Written on first run |
+| Global override | `~/.cc-modelrouter/provider-presets.json` | Same path (you can hand-edit) |
+| Project override | `<cwd>/.cc-modelrouter/provider-presets.json` | Per-project presets |
+
+Each provider key in a JSON file fully replaces the inherited entry for that
+key. Missing keys keep their inherited value.
+
+### File format
+
+```json
+{
+  "anthropic": {
+    "baseUrl": "https://api.anthropic.com",
+    "transformer": "anthropic",
+    "models": ["claude-haiku-4.5", "claude-sonnet-4.6"]
+  },
+  "my-custom": {
+    "baseUrl": "https://internal.example.com",
+    "transformer": "anthropic",
+    "models": ["custom-model-1"]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `baseUrl` | string | Provider API base URL |
+| `transformer` | string | One of: `anthropic`, `openai`, `glm_anthropic`, `gemini` |
+| `models` | string[] | Suggested model names for autocomplete |
+
+### Offline behavior
+
+If the fetch fails (offline, GitHub down, invalid response), the wizard
+launches with an empty preset set. You can still add providers manually.
+The next `ccrouter config` run retries the fetch automatically.

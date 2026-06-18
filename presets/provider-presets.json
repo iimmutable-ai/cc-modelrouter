@@ -1,0 +1,37 @@
+{
+  "alicloud": {
+    "baseUrl": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+    "transformer": "glm_anthropic",
+    "models": ["MiniMax-M2.5", "kimi-k2.5", "qwen3-coder-plus", "glm-5", "glm-4.7"]
+  },
+  "anthropic": {
+    "baseUrl": "https://api.anthropic.com",
+    "transformer": "anthropic",
+    "models": ["claude-haiku-4.5", "claude-sonnet-4.6", "claude-opus-4.5", "claude-opus-4.6"]
+  },
+  "bigmodel": {
+    "baseUrl": "https://open.bigmodel.cn/api",
+    "transformer": "glm_anthropic",
+    "models": ["glm-4.6v", "glm-4.7", "glm-5-turbo", "glm-5v-turbo", "glm-5.1"]
+  },
+  "openrouter": {
+    "baseUrl": "https://openrouter.ai/api",
+    "transformer": "anthropic",
+    "models": ["openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-5.3-codex", "google/gemini-2.5-flash", "google/gemini-2.5-pro"]
+  },
+  "openrouter-openai": {
+    "baseUrl": "https://openrouter.ai/api",
+    "transformer": "anthropic",
+    "models": ["openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-5.3-codex"]
+  },
+  "openrouter-anthropic": {
+    "baseUrl": "https://openrouter.ai/api",
+    "transformer": "anthropic",
+    "models": ["anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.5", "anthropic/claude-opus-4.6"]
+  },
+  "gemini": {
+    "baseUrl": "https://generativelanguage.googleapis.com",
+    "transformer": "gemini",
+    "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+  }
+}

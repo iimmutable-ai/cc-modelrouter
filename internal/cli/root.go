@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/iimmutable/cc-modelrouter/internal/version"
 	"github.com/spf13/cobra"
 )
 
 // Version is the application version.
-var Version = "0.1.0"
+var Version = version.String()
 
 // NewRootCommand creates the root command.
 func NewRootCommand() *cobra.Command {

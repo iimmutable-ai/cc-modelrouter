@@ -41,9 +41,27 @@ Runs locally on localhost. API keys never leave your machine. Admin API is token
 
 ### Install
 
+**Recommended (curl):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/scripts/install.sh | bash
+```
+
+**Alternative (Go users):**
+
 ```bash
 go install github.com/iimmutable/cc-modelrouter/cmd/ccrouter@latest
 ```
+
+**From source:**
+
+```bash
+git clone https://github.com/iimmutable/cc-modelrouter
+cd cc-modelrouter
+make install
+```
+
+> **Note:** The first `ccrouter config` run downloads the latest provider presets from GitHub. To refresh presets later, delete `~/.cc-modelrouter/provider-presets.json` and re-run `ccrouter config`.
 
 ### Configure
 
@@ -465,9 +483,14 @@ See [docs/cli-reference.md](docs/cli-reference.md) for the full command referenc
 ## Development
 
 ```bash
-# Build
+# Build (branch-aware: "dev" tag on dev-local, git-tag elsewhere)
+make build
+
+# Release build (stripped symbols, same branch-aware version)
+make release
+
+# Quick single-platform debug build (no Linux cross-compile)
 go build -o bin/debug/ccrouter ./cmd/ccrouter
-GOOS=linux GOARCH=amd64 go build -o bin/linux-amd64/ccrouter ./cmd/ccrouter
 
 # Test
 go test ./...

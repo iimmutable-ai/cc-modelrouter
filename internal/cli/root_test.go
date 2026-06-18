@@ -72,10 +72,13 @@ func TestNewRootCommand_VersionNotEmpty(t *testing.T) {
 		t.Error("expected version to be non-empty")
 	}
 
-	// Should match semantic version format (major.minor.patch)
-	parts := strings.Split(cmd.Version, ".")
-	if len(parts) != 3 {
-		t.Errorf("expected version in format 'X.Y.Z', got '%s'", cmd.Version)
+	// Version can be one of three formats depending on build context:
+	// - "X.Y.Z" (Fallback, no git)
+	// - "dev-<hex>" (dev-local branch)
+	// - "<tag>-<hex>" (release tag with build hex)
+	// We just verify it's not empty and looks like a version string.
+	if !strings.Contains(cmd.Version, ".") && !strings.Contains(cmd.Version, "-") {
+		t.Errorf("expected version to contain '.' or '-' (semver or tag-hex), got '%s'", cmd.Version)
 	}
 }
 
@@ -249,10 +252,12 @@ func TestVersion(t *testing.T) {
 		t.Error("expected Version to be set")
 	}
 
-	// Should be a valid version string
-	parts := strings.Split(Version, ".")
-	if len(parts) != 3 {
-		t.Errorf("expected version in format 'X.Y.Z', got '%s'", Version)
+	// Version can be one of three formats depending on build context:
+	// - "X.Y.Z" (Fallback, no git)
+	// - "dev-<hex>" (dev-local branch)
+	// - "<tag>-<hex>" (release tag with build hex)
+	if !strings.Contains(Version, ".") && !strings.Contains(Version, "-") {
+		t.Errorf("expected version to contain '.' or '-' (semver or tag-hex), got '%s'", Version)
 	}
 }
 

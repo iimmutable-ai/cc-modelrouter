@@ -1899,6 +1899,17 @@ func TestIsReview(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "review keyword in earlier message but not latest should not match",
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Please review this code"}}},
+					{Role: anthropic.RoleAssistant, Content: []anthropic.ContentBlock{{Type: "text", Text: "Done reviewing."}}},
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Now fix the bug in main.go"}}},
+				},
+			},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1911,18 +1922,82 @@ func TestIsReview(t *testing.T) {
 	}
 }
 
-// TestIsSubagent verifies that isSubagent() only triggers on genuine subagent
-// indicators and does NOT false-positive on Claude Code's generic "Agent" tool.
+// TestIsSubagent verifies that isSubagent() detects Claude Code subagent
+// requests via the X-Claude-Code-Agent-Id / X-Claude-Code-Parent-Agent-Id
+// headers (primary signal, shipped in Claude Code v2.1.139+) and falls back
+// to tool/message heuristics for older versions. It must NOT false-positive
+// on Claude Code's generic "Agent" tool without those headers.
 func TestIsSubagent(t *testing.T) {
 	handler := NewHandler(10 * 1024 * 1024)
 
+	// newHTTPRequest builds a minimal POST /v1/messages request for header-based tests.
+	newHTTPRequest := func(headers map[string]string) *http.Request {
+		r := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader([]byte("{}")))
+		for k, v := range headers {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+
 	tests := []struct {
-		name string
-		req  *anthropic.Request
-		want bool
+		name    string
+		httpReq *http.Request
+		req     *anthropic.Request
+		want    bool
 	}{
+		// --- Header-based detection (primary signal) ---
 		{
-			name: "normal request with Agent tool should not match",
+			name:    "X-Claude-Code-Agent-Id set with normal Agent tool body should match",
+			httpReq: newHTTPRequest(map[string]string{"X-Claude-Code-Agent-Id": "task-abc-123"}),
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "Agent"},
+					{Name: "Bash"},
+					{Name: "Read"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Explore the codebase"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name:    "X-Claude-Code-Parent-Agent-Id set (nested subagent) should match",
+			httpReq: newHTTPRequest(map[string]string{"X-Claude-Code-Parent-Agent-Id": "main-agent-1"}),
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "do something"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name:    "both agent-id headers set should match",
+			httpReq: newHTTPRequest(map[string]string{"X-Claude-Code-Agent-Id": "child-1", "X-Claude-Code-Parent-Agent-Id": "parent-1"}),
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "hello"}}},
+				},
+			},
+			want: true,
+		},
+		{
+			name:    "empty X-Claude-Code-Agent-Id should NOT match via header",
+			httpReq: newHTTPRequest(map[string]string{"X-Claude-Code-Agent-Id": ""}),
+			req: &anthropic.Request{
+				Tools: []anthropic.Tool{
+					{Name: "Agent"},
+				},
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Fix the bug in main.go"}}},
+				},
+			},
+			want: false,
+		},
+		// --- Fallback heuristic detection (older Claude Code versions) ---
+		{
+			name:    "no headers: normal request with Agent tool should not match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Tools: []anthropic.Tool{
 					{Name: "Agent"},
@@ -1936,7 +2011,8 @@ func TestIsSubagent(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "tool named subagent_dispatch should match",
+			name:    "no headers: tool named subagent_dispatch should match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Tools: []anthropic.Tool{
 					{Name: "subagent_dispatch"},
@@ -1948,7 +2024,8 @@ func TestIsSubagent(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "user message mentioning subagent should match",
+			name:    "no headers: user message mentioning subagent should match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Messages: []anthropic.Message{
 					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Please run this as a subagent task"}}},
@@ -1957,7 +2034,8 @@ func TestIsSubagent(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "user message mentioning delegate to agent should match",
+			name:    "no headers: user message mentioning delegate to agent should match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Messages: []anthropic.Message{
 					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "delegate to agent for processing"}}},
@@ -1966,7 +2044,8 @@ func TestIsSubagent(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "run this in parallel should NOT match",
+			name:    "no headers: run this in parallel should NOT match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Messages: []anthropic.Message{
 					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "run this in parallel with the other task"}}},
@@ -1975,7 +2054,8 @@ func TestIsSubagent(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "use an agent to should NOT match",
+			name:    "no headers: use an agent to should NOT match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Messages: []anthropic.Message{
 					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "use an agent to help with this"}}},
@@ -1984,7 +2064,8 @@ func TestIsSubagent(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "normal request with no subagent indicators",
+			name:    "no headers: normal request with no subagent indicators",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Tools: []anthropic.Tool{
 					{Name: "Bash"},
@@ -1998,10 +2079,23 @@ func TestIsSubagent(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "assistant message with subagent should not match",
+			name:    "no headers: assistant message with subagent should not match",
+			httpReq: newHTTPRequest(nil),
 			req: &anthropic.Request{
 				Messages: []anthropic.Message{
 					{Role: anthropic.RoleAssistant, Content: []anthropic.ContentBlock{{Type: "text", Text: "I will use a subagent for this"}}},
+				},
+			},
+			want: false,
+		},
+		{
+			name:    "no headers: subagent keyword in earlier message but not latest should not match",
+			httpReq: newHTTPRequest(nil),
+			req: &anthropic.Request{
+				Messages: []anthropic.Message{
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Run this as a subagent task"}}},
+					{Role: anthropic.RoleAssistant, Content: []anthropic.ContentBlock{{Type: "text", Text: "Subagent task completed."}}},
+					{Role: anthropic.RoleUser, Content: []anthropic.ContentBlock{{Type: "text", Text: "Now fix the bug in main.go"}}},
 				},
 			},
 			want: false,
@@ -2010,7 +2104,7 @@ func TestIsSubagent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := handler.isSubagent(tt.req)
+			got := handler.isSubagent(tt.httpReq, tt.req)
 			if got != tt.want {
 				t.Errorf("isSubagent() = %v, want %v", got, tt.want)
 			}

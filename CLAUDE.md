@@ -8,15 +8,18 @@ AI-specific guidance for Claude Code when working with cc-modelrouter.
 
 ### Essential Build & Test Commands
 ```bash
-# Build debug binary (always cross-compile for Linux too)
-go build -o bin/debug/ccrouter ./cmd/ccrouter
-GOOS=linux GOARCH=amd64 go build -o bin/linux-amd64/ccrouter ./cmd/ccrouter
-GOOS=linux GOARCH=arm64 go build -o bin/linux-arm64/ccrouter ./cmd/ccrouter
+# Build debug binary (branch-aware: "dev" tag on dev-local, git-tag elsewhere)
+make build
 
-# Build release binary
-go build -ldflags="-s -w" -o bin/release/ccrouter ./cmd/ccrouter
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/linux-amd64/ccrouter ./cmd/ccrouter
-GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/linux-arm64/ccrouter ./cmd/ccrouter
+# Build release binary (stripped symbols, same branch-aware version)
+make release
+
+# Quick single-platform debug build (no Linux cross-compile)
+go build -o bin/debug/ccrouter ./cmd/ccrouter
+
+# NOTE: Plain `go build` (no ldflags) still reports a valid version via runtime
+# git detection (e.g., "dev-2661291a" on dev-local). Prefer `make build` for the
+# canonical cross-compiled build.
 
 # Run all tests
 go test ./...

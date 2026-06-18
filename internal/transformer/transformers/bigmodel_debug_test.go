@@ -378,3 +378,68 @@ func BenchmarkRequestPreparation(b *testing.B) {
 		}
 	}
 }
+
+// TestGLMAnthropicPrepareRequestNormalizesNullSchema reproduces the 422 scenario from
+// inst_20260617_120222: Claude Code's internal web_search tool sends
+// {"name":"web_search","input_schema":null}, which BigModel rejects with HTTP 422
+// ("Input should be a valid dictionary"). The transformer must coerce the null schema
+// to {"type":"object"} in the outbound body.
+func TestGLMAnthropicPrepareRequestNormalizesNullSchema(t *testing.T) {
+	transformer := NewGLMAnthropicTransformer()
+
+	req := &anthropic.Request{
+		Model:     "glm-4.7",
+		MaxTokens: 1024,
+		Stream:    true,
+		Messages: []anthropic.Message{
+			{Role: "user", Content: anthropic.MessageContent{{Type: "text", Text: "search the web"}}},
+		},
+		Tools: []anthropic.Tool{
+			{Name: "web_search", InputSchema: nil},
+		},
+	}
+
+	httpReq, err := transformer.PrepareRequest(req, "http://test.example.com", "test-key", "glm-4.7")
+	if err != nil {
+		t.Fatalf("PrepareRequest failed: %v", err)
+	}
+	if httpReq.GetBody == nil {
+		t.Fatal("GetBody is nil; cannot inspect outbound body")
+	}
+
+	bodyRC, err := httpReq.GetBody()
+	if err != nil {
+		t.Fatalf("GetBody() failed: %v", err)
+	}
+	defer bodyRC.Close()
+	bodyBytes, err := io.ReadAll(bodyRC)
+	if err != nil {
+		t.Fatalf("reading body failed: %v", err)
+	}
+	bodyStr := string(bodyBytes)
+
+	if strings.Contains(bodyStr, `"input_schema":null`) {
+		t.Errorf("outbound body still contains null schema:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"input_schema":{"type":"object"}`) {
+		t.Errorf("outbound body missing normalized schema; expected substring \"input_schema\":{\"type\":\"object\"}.\nBody: %s", bodyStr)
+	}
+
+	// Verify the body is valid JSON and the tool name survived.
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		t.Fatalf("outbound body is not valid JSON: %v", err)
+	}
+	tools, ok := parsed["tools"].([]interface{})
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %v", parsed["tools"])
+	}
+	tool0, _ := tools[0].(map[string]interface{})
+	if tool0["name"] != "web_search" {
+		t.Errorf("expected tool name web_search, got %v", tool0["name"])
+	}
+	schema, _ := tool0["input_schema"].(map[string]interface{})
+	if schema == nil || schema["type"] != "object" {
+		t.Errorf("expected input_schema.type=object, got %v", tool0["input_schema"])
+	}
+}

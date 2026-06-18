@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -417,7 +418,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request, req *an
 		HasWebSearch: h.hasWebSearch(req),
 		HasImages:    h.hasImages(req),
 		IsReview:     h.isReview(req),
-		IsSubagent:   h.isSubagent(req),
+		IsSubagent:   h.isSubagent(r, req),
 	}
 	routeName := h.router.DetectRoute(routeReq)
 
@@ -553,10 +554,12 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, r *http.Request, req *a
 		return
 	}
 
-	// CRITICAL FIX: Create a fresh context for each provider attempt
-	// This prevents "context canceled" errors from cascading across providers.
-	// We use context.Background() for each attempt to ensure independence.
-	baseCtx := context.Background()
+	// Derive the upstream context from the client request so that if Claude Code
+	// disconnects (exits), the upstream SSE stream is cancelled promptly and the
+	// request goroutine returns. Each failover attempt below still gets its own
+	// child context via context.WithCancel(baseCtx), so a failed attempt's
+	// cancellation does not cascade to subsequent attempts.
+	baseCtx := r.Context()
 
 	// Try each target with failover
 	for i, target := range targets {
@@ -736,7 +739,24 @@ func (h *Handler) tryTarget(ctx context.Context, req *anthropic.Request, target 
 	}
 
 	// Parse response: Provider Response -> Anthropic
-	return tf.ParseResponse(resp)
+	const maxBodySize = 10 * 1024 * 1024 // 10 MB
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	anthropicResp, err := tf.ParseResponse(resp)
+	if err != nil {
+		bodyPreview := strings.ReplaceAll(string(bodyBytes), "\n", " ")
+		bodyPreview = strings.ReplaceAll(bodyPreview, "\r", " ")
+		if len([]rune(bodyPreview)) > 500 {
+			bodyPreview = string([]rune(bodyPreview)[:500]) + "..."
+		}
+		logging.Debugf("[PARSE ERROR] Provider response body (status %s): %s", resp.Status, bodyPreview)
+		return nil, fmt.Errorf("failed to parse provider response: %w", err)
+	}
+	return anthropicResp, nil
 }
 
 // tryStreamingTarget attempts to send a streaming request to a target provider.
@@ -1108,23 +1128,32 @@ func (h *Handler) getThinkLevel(req *anthropic.Request) router.ThinkLevel {
 	}
 }
 
+// lastUserMessage returns the last user message from the message list, or nil if none exists.
+func lastUserMessage(messages []anthropic.Message) *anthropic.Message {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == anthropic.RoleUser {
+			return &messages[i]
+		}
+	}
+	return nil
+}
+
 // isReview checks if the request is a review task based on message content.
 // Note: /review is a slash command (user message), not a tool.
 // MCP tools like create_pull_request_review are CRUD operations, not review task indicators.
 func (h *Handler) isReview(req *anthropic.Request) bool {
-	// Check message content for review keywords
-	for _, msg := range req.Messages {
-		if msg.Role == "user" {
-			for _, block := range msg.Content {
-				if block.Type == "text" {
-					text := strings.ToLower(block.Text)
-					if strings.Contains(text, "/review") ||
-						strings.Contains(text, "code review") ||
-						strings.Contains(text, "review this") ||
-						strings.Contains(text, "review the") ||
-						strings.HasPrefix(text, "review ") {
-						return true
-					}
+	// Check only the last user message — conversation history may contain
+	// review keywords from earlier turns that should not classify later requests.
+	if msg := lastUserMessage(req.Messages); msg != nil {
+		for _, block := range msg.Content {
+			if block.Type == "text" {
+				text := strings.ToLower(block.Text)
+				if strings.Contains(text, "/review") ||
+					strings.Contains(text, "code review") ||
+					strings.Contains(text, "review this") ||
+					strings.Contains(text, "review the") ||
+					strings.HasPrefix(text, "review ") {
+					return true
 				}
 			}
 		}
@@ -1133,9 +1162,19 @@ func (h *Handler) isReview(req *anthropic.Request) bool {
 	return false
 }
 
-// isSubagent checks if the request is a subagent task based on tools or content.
-func (h *Handler) isSubagent(req *anthropic.Request) bool {
-	// Check tool names for subagent indicators
+// isSubagent checks if the request originates from a Claude Code subagent.
+// Primary signal: X-Claude-Code-Agent-Id header (set by Claude Code v2.1.139+
+// on subagent dispatches, absent on main-agent requests).
+// Fallback heuristics: tool names / last user message containing subagent
+// keywords (for older Claude Code versions).
+func (h *Handler) isSubagent(r *http.Request, req *anthropic.Request) bool {
+	// Primary: official Claude Code subagent identification headers.
+	if r.Header.Get("X-Claude-Code-Agent-Id") != "" ||
+		r.Header.Get("X-Claude-Code-Parent-Agent-Id") != "" {
+		return true
+	}
+
+	// Fallback: check tool names for subagent indicators.
 	for _, tool := range req.Tools {
 		toolName := strings.ToLower(tool.Name)
 		if strings.Contains(toolName, "subagent") {
@@ -1143,16 +1182,16 @@ func (h *Handler) isSubagent(req *anthropic.Request) bool {
 		}
 	}
 
-	// Check message content for subagent keywords
-	for _, msg := range req.Messages {
-		if msg.Role == "user" {
-			for _, block := range msg.Content {
-				if block.Type == "text" {
-					text := strings.ToLower(block.Text)
-					if strings.Contains(text, "subagent") ||
-						strings.Contains(text, "delegate to agent") {
-						return true
-					}
+	// Fallback: check only the last user message — conversation history may
+	// contain subagent keywords from earlier turns that should not classify
+	// later requests.
+	if msg := lastUserMessage(req.Messages); msg != nil {
+		for _, block := range msg.Content {
+			if block.Type == "text" {
+				text := strings.ToLower(block.Text)
+				if strings.Contains(text, "subagent") ||
+					strings.Contains(text, "delegate to agent") {
+					return true
 				}
 			}
 		}

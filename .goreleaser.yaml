@@ -1,0 +1,61 @@
+project_name: ccrouter
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ccrouter
+    main: ./cmd/ccrouter
+    binary: ccrouter
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/iimmutable/cc-modelrouter/internal/version.Tag={{.Tag}}
+      - -X github.com/iimmutable/cc-modelrouter/internal/version.BuildTime={{ time "060102150405" }}
+    flags:
+      - -trimpath
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - "merge conflict"
+      - "Merge pull request"
+      - "Merge remote-tracking branch"
+
+release:
+  github:
+    owner: iimmutable
+    name: cc-modelrouter
+  draft: false
+  prerelease: auto
+  name_template: "{{ .ProjectName }} v{{ .Version }}"

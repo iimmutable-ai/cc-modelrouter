@@ -24,6 +24,7 @@ import (
 	"github.com/iimmutable/cc-modelrouter/internal/transformer"
 	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
 	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable/cc-modelrouter/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -248,7 +249,7 @@ func runCode(cmd *cobra.Command, rawArgs []string) error {
 	logging.Infof("Logging initialized - router starting for Claude Code")
 
 	// Start in foreground mode
-	fmt.Printf("Starting router...\n")
+	fmt.Printf("Starting ccrouter %s...\n", version.String())
 	if cfg.Logging.IsEnabled() {
 		if cfg.Logging.Destination == "file" || cfg.Logging.Destination == "" {
 			if logPath, logErr := cfg.Logging.GetLogPath(); logErr == nil {

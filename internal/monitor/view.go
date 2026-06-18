@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable/cc-modelrouter/internal/version"
 	"github.com/mattn/go-runewidth"
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
@@ -746,9 +747,13 @@ func (m *MonitorModel) renderStatusBar() string {
 		shortcuts += " | g:groups | u:users | o:routes"
 	}
 
-	// Calculate padding using visual width
+	// Right-aligned version label
+	versionTag := "v" + version.String()
+	versionWidth := runewidth.StringWidth(versionTag)
+
+	// Calculate padding using visual width (subtract version space too)
 	shortcutsWidth := runewidth.StringWidth(shortcuts)
-	padding := m.WindowSize.Width - shortcutsWidth - 3
+	padding := m.WindowSize.Width - shortcutsWidth - versionWidth - 3
 	if padding < 0 {
 		padding = 0
 	}
@@ -761,7 +766,7 @@ func (m *MonitorModel) renderStatusBar() string {
 
 	shortcutStyle := lipgloss.NewStyle().
 		Width(m.WindowSize.Width - 3).
-		Render(shortcuts + strings.Repeat(" ", padding))
+		Render(shortcuts + strings.Repeat(" ", padding) + versionTag)
 
 	return statusBarStyle.Render(shortcutStyle)
 }

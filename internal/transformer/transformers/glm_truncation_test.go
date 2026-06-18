@@ -117,3 +117,82 @@ func TestTruncateToolNames(t *testing.T) {
 		}
 	})
 }
+
+func TestNormalizeNullToolSchemas(t *testing.T) {
+	t.Run("nil schema becomes object", func(t *testing.T) {
+		req := &anthropic.Request{
+			Tools: []anthropic.Tool{
+				{Name: "web_search", InputSchema: nil},
+			},
+		}
+		normalizeNullToolSchemas(req)
+		schema, ok := req.Tools[0].InputSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("expected map[string]any, got %T", req.Tools[0].InputSchema)
+		}
+		if schema["type"] != "object" {
+			t.Errorf("expected type=object, got %v", schema["type"])
+		}
+	})
+
+	t.Run("populated schema unchanged", func(t *testing.T) {
+		originalSchema := map[string]any{"type": "string"}
+		req := &anthropic.Request{
+			Tools: []anthropic.Tool{
+				{Name: "my_tool", InputSchema: originalSchema},
+			},
+		}
+		normalizeNullToolSchemas(req)
+		got, ok := req.Tools[0].InputSchema.(map[string]any)
+		if !ok || got["type"] != "string" {
+			t.Errorf("populated schema should be unchanged, got %v", req.Tools[0].InputSchema)
+		}
+	})
+
+	t.Run("multiple tools mixed nil and non-nil", func(t *testing.T) {
+		req := &anthropic.Request{
+			Tools: []anthropic.Tool{
+				{Name: "web_search", InputSchema: nil},
+				{Name: "my_tool", InputSchema: map[string]any{"type": "string"}},
+				{Name: "another_search", InputSchema: nil},
+			},
+		}
+		normalizeNullToolSchemas(req)
+
+		// First tool: nil -> object
+		schema0, ok0 := req.Tools[0].InputSchema.(map[string]any)
+		if !ok0 || schema0["type"] != "object" {
+			t.Errorf("tool0: expected {type: object}, got %v", req.Tools[0].InputSchema)
+		}
+
+		// Second tool: unchanged
+		if req.Tools[1].InputSchema == nil {
+			t.Error("tool1: populated schema should be unchanged")
+		}
+
+		// Third tool: nil -> object
+		schema2, ok2 := req.Tools[2].InputSchema.(map[string]any)
+		if !ok2 || schema2["type"] != "object" {
+			t.Errorf("tool2: expected {type: object}, got %v", req.Tools[2].InputSchema)
+		}
+	})
+
+	t.Run("no tools", func(t *testing.T) {
+		req := &anthropic.Request{}
+		normalizeNullToolSchemas(req) // should not panic
+	})
+
+	t.Run("empty object schema unchanged", func(t *testing.T) {
+		emptySchema := map[string]any{}
+		req := &anthropic.Request{
+			Tools: []anthropic.Tool{
+				{Name: "my_tool", InputSchema: emptySchema},
+			},
+		}
+		normalizeNullToolSchemas(req)
+		got, ok := req.Tools[0].InputSchema.(map[string]any)
+		if !ok || len(got) != 0 {
+			t.Errorf("empty object schema should be unchanged, got %v", req.Tools[0].InputSchema)
+		}
+	})
+}

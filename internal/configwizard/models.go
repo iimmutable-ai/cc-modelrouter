@@ -198,49 +198,12 @@ type PendingGroupOp struct {
 }
 
 // ProviderPreset defines preset provider configurations.
+// The presets are loaded from presets/provider-presets.json in the repo,
+// auto-fetched from GitHub on first run of `ccrouter config`.
 type ProviderPreset struct {
 	BaseURL     string
 	Transformer string
 	Models      []string
-}
-
-// ProviderPresets contains all available provider presets.
-var ProviderPresets = map[string]ProviderPreset{
-	"alicloud": {
-		BaseURL:     "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-		Transformer: "glm_anthropic",
-		Models:      []string{"MiniMax-M2.5", "kimi-k2.5", "qwen3-coder-plus", "glm-5", "glm-4.7"},
-	},
-	"anthropic": {
-		BaseURL:     "https://api.anthropic.com",
-		Transformer: "anthropic",
-		Models:      []string{"claude-haiku-4.5", "claude-sonnet-4.6", "claude-opus-4.5", "claude-opus-4.6"},
-	},
-	"bigmodel": {
-		BaseURL:     "https://open.bigmodel.cn/api",
-		Transformer: "glm_anthropic",
-		Models:      []string{"glm-4.6v", "glm-4.7", "glm-5-turbo", "glm-5v-turbo", "glm-5.1"},
-	},
-	"openrouter": {
-		BaseURL:     "https://openrouter.ai/api",
-		Transformer: "anthropic",
-		Models:      []string{"openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-5.3-codex", "google/gemini-2.5-flash", "google/gemini-2.5-pro"},
-	},
-	"openrouter-openai": {
-		BaseURL:     "https://openrouter.ai/api",
-		Transformer: "anthropic",
-		Models:      []string{"openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-5.3-codex"},
-	},
-	"openrouter-anthropic": {
-		BaseURL:     "https://openrouter.ai/api",
-		Transformer: "anthropic",
-		Models:      []string{"anthropic/claude-haiku-4.5", "anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.5", "anthropic/claude-opus-4.6"},
-	},
-	"gemini": {
-		BaseURL:     "https://generativelanguage.googleapis.com",
-		Transformer: "gemini",
-		Models:      []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"},
-	},
 }
 
 // PredefinedRouteNames are the built-in route names.

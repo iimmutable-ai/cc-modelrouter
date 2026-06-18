@@ -15,6 +15,7 @@ import (
 	"github.com/iimmutable/cc-modelrouter/internal/config"
 	"github.com/iimmutable/cc-modelrouter/internal/logging"
 	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable/cc-modelrouter/internal/version"
 
 	"github.com/mattn/go-runewidth"
 
@@ -93,6 +94,12 @@ func (m *WizardModel) contentWidth() int {
 		return 20
 	}
 	return w
+}
+
+// footline renders the help-text line with the version label appended.
+// `help` is the screen-specific keyboard-hint string (e.g. "[↑/↓] Navigate ...").
+func (m *WizardModel) footline(help string) string {
+	return HelpTextStyle.Width(m.contentWidth()).Render(help + "   ccrouter " + version.String())
 }
 
 // NewWizardModel creates a new wizard model.
@@ -2551,7 +2558,7 @@ func (m *WizardModel) renderMainMenu() string {
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, menuLines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Navigate   [Enter] Select"),
+		m.footline("[↑/↓] Navigate   [Enter] Select"),
 	)
 
 	if m.state.HasUnsavedChanges() {
@@ -2593,7 +2600,7 @@ func (m *WizardModel) renderProviders() string {
 	}
 
 	providerLines = append(providerLines, m.blankLine())
-	providerLines = append(providerLines, HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Navigate   [Enter] Edit   [a] Add   [T] Test   [⌫] Delete   [Esc] Back"))
+	providerLines = append(providerLines, m.footline("[↑/↓] Navigate   [Enter] Edit   [a] Add   [T] Test   [⌫] Delete   [Esc] Back"))
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -2627,7 +2634,7 @@ func (m *WizardModel) renderTestConnection() string {
 
 	switch m.state.TestStatus {
 	case "testing":
-		lines = append(lines, HelpTextStyle.Width(m.contentWidth()).Render("Testing connection..."))
+		lines = append(lines, m.footline("Testing connection..."))
 	case "success":
 		latency := m.state.TestLatency * 1000
 		lines = append(lines, ErrorStyle.Width(m.contentWidth()).Render("Connection successful!"))
@@ -2638,7 +2645,7 @@ func (m *WizardModel) renderTestConnection() string {
 	}
 
 	lines = append(lines, m.blankLine())
-	lines = append(lines, HelpTextStyle.Width(m.contentWidth()).Render("[Esc] Back to Providers"))
+	lines = append(lines, m.footline("[Esc] Back to Providers"))
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -2881,19 +2888,19 @@ func (m *WizardModel) renderAddProvider1() string {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Select preset   [Enter] Apply   [Esc] Close"),
+			m.footline("[↑/↓] Select preset   [Enter] Apply   [Esc] Close"),
 		)
 	} else if m.state.ShowModelDropdown && m.focusedField == 2 {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Select model   [Enter] Insert   [Esc] Close"),
+			m.footline("[↑/↓] Select model   [Enter] Insert   [Esc] Close"),
 		)
 	} else {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[Esc] Cancel   [Tab] Next field   [Enter] Next →"),
+			m.footline("[Esc] Cancel   [Tab] Next field   [Enter] Next →"),
 		)
 	}
 
@@ -2978,7 +2985,7 @@ func (m *WizardModel) renderAddProvider2() string {
 func (m *WizardModel) renderAddProvider2Hints() string {
 	const hintsText = "[Esc] Back   [Enter] Save   [⌘V/Ctrl+V] Paste"
 	if m.state.ErrorMessage == "" {
-		return HelpTextStyle.Width(m.contentWidth()).Render(hintsText)
+		return m.footline(hintsText)
 	}
 	hintsLeft := HelpTextStyle.Render(hintsText)
 	errorHint := ErrorStyle.Render(m.state.ErrorMessage)
@@ -3089,7 +3096,7 @@ func (m *WizardModel) renderRoutes() string {
 		m.divider(),
 		lipgloss.JoinVertical(lipgloss.Left, routeLines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render(hints),
+		m.footline(hints),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
@@ -3352,7 +3359,7 @@ func (m *WizardModel) renderCreateProfile() string {
 		m.blankLine(),
 		m.fullWidth(buttons),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next   [Enter] Confirm   [Esc] Cancel"),
+		m.footline("[Tab] Next   [Enter] Confirm   [Esc] Cancel"),
 	)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, contentParts...)
@@ -3561,7 +3568,7 @@ func (m *WizardModel) renderEditProfile() string {
 		m.blankLine(),
 		m.fullWidth(buttons),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next   [Enter] Confirm   [Esc] Cancel"),
+		m.footline("[Tab] Next   [Enter] Confirm   [Esc] Cancel"),
 	)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, contentParts...)
@@ -3842,31 +3849,31 @@ func (m *WizardModel) renderEditRoute() string {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Select   [Enter] Pick   [Esc] Close   [Type] Filter"),
+			m.footline("[↑/↓] Select   [Enter] Pick   [Esc] Close   [Type] Filter"),
 		)
 	} else if m.state.ShowDropdown && m.focusedField == 1 {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[↑/↓] Select model   [Enter] Select   [Esc] Close"),
+			m.footline("[↑/↓] Select model   [Enter] Select   [Esc] Close"),
 		)
 	} else if m.focusedField == 1 {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[Esc] Back   [Tab] Next   [Enter] Save   [a] Add   [⌫] Delete"),
+			m.footline("[Esc] Back   [Tab] Next   [Enter] Save   [a] Add   [⌫] Delete"),
 		)
 	} else if m.focusedField == 0 {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[Esc] Back   [Tab] Next   [Enter] Show options"),
+			m.footline("[Esc] Back   [Tab] Next   [Enter] Show options"),
 		)
 	} else {
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			content,
-			HelpTextStyle.Width(m.contentWidth()).Render("[Esc] Back   [Tab] Next   [Enter] Save"),
+			m.footline("[Esc] Back   [Tab] Next   [Enter] Save"),
 		)
 	}
 
@@ -3946,7 +3953,7 @@ func (m *WizardModel) renderServer() string {
 		m.blankLine(),
 		note,
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Esc/Enter] Apply & Back   [Tab] Next field"),
+		m.footline("[Esc/Enter] Apply & Back   [Tab] Next field"),
 	)
 
 	if m.state.ErrorMessage != "" {
@@ -4100,7 +4107,7 @@ func (m *WizardModel) renderLogging() string {
 		lipgloss.Left,
 		content,
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render(hints),
+		m.footline(hints),
 	)
 
 	if m.state.ErrorMessage != "" {
@@ -4200,7 +4207,7 @@ func (m *WizardModel) renderViewConfig() string {
 		m.blankLine(),
 		m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, closeBtn)),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[P] Export to file   [Esc] Close"),
+		m.footline("[P] Export to file   [Esc] Close"),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
@@ -4704,7 +4711,7 @@ func (m *WizardModel) renderAPIKeys() string {
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render(hint),
+		m.footline(hint),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
@@ -4886,7 +4893,7 @@ func (m *WizardModel) renderCreateAPIKey() string {
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next field   [Enter] Action   [Esc] Back"),
+		m.footline("[Tab] Next field   [Enter] Action   [Esc] Back"),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)
@@ -5366,7 +5373,7 @@ func (m *WizardModel) renderMultiUser() string {
 		m.fullWidth(lipgloss.JoinHorizontal(lipgloss.Center, saveBtn, "  ", cancelBtn)),
 		m.blankLine(),
 		m.divider(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[Tab] Next   [Enter] Action   [Esc] Cancel & Back   [Space] Toggle"),
+		m.footline("[Tab] Next   [Enter] Action   [Esc] Cancel & Back   [Space] Toggle"),
 	)
 
 	if m.state.ErrorMessage != "" {
@@ -5424,7 +5431,7 @@ func (m *WizardModel) renderGroups() string {
 		title, m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
-		HelpTextStyle.Width(m.contentWidth()).Render("[a] Add   [\u232b] Delete   [Enter] Edit   [Esc] Back"),
+		m.footline("[a] Add   [\u232b] Delete   [Enter] Edit   [Esc] Back"),
 	)
 
 	if m.state.ErrorMessage != "" {
@@ -5550,7 +5557,7 @@ func (m *WizardModel) renderCreateGroup() string {
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		m.blankLine(),
 		m.divider(),
-		HelpTextStyle.Width(m.contentWidth()).Render(helpText),
+		m.footline(helpText),
 	)
 
 	mainBox := MainContainerStyle.Width(m.width - 2).Render(content)

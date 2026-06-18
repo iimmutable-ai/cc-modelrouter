@@ -8,8 +8,12 @@
 |-------|------|----------|
 | Global | `~/.cc-modelrouter/config.json` | Low |
 | Project | `<project>/.cc-modelrouter/config.json` | High (overrides global) |
+| Global presets | `~/.cc-modelrouter/provider-presets.json` | Wizard autocomplete (fetched on first run) |
+| Project presets | `<project>/.cc-modelrouter/provider-presets.json` | Wizard autocomplete (overrides global presets) |
 
 Project configuration **completely overrides** global configuration when present. There is no deep merging.
+
+> **Provider presets** are a separate JSON file used only by the `ccrouter config` wizard for autocomplete suggestions (provider base URL, transformer, and common models). They are auto-fetched from GitHub on the first `ccrouter config` run. See [CLI Reference - Provider Presets](cli-reference.md#provider-presets) for details.
 
 ### Basic Structure
 

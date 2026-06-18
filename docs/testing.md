@@ -481,7 +481,7 @@ Tests for CLI command structure:
 |------|-------------|
 | `NewRootCommand*` | Root command creation and properties |
 | `NewRootCommand_*Command` | Subcommand verification |
-| `Version` | Version constant verification |
+| `Version` | Version string verification (accepts `X.Y.Z`, `dev-<hex>`, or `<tag>-<hex>`) |
 | `Execute_*` | Execute function behavior |
 | `NewRootCommand_PersistentFlags` | Flag configuration |
 

@@ -21,6 +21,7 @@ import (
 	"github.com/iimmutable/cc-modelrouter/internal/transformer"
 	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
 	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable/cc-modelrouter/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -170,7 +171,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	logging.Infof("Logging initialized - router starting on %s", addr)
 
 	// Log startup
-	fmt.Printf("Starting router on %s\n", addr)
+	fmt.Printf("Starting ccrouter %s on %s\n", version.String(), addr)
 	if cfg.Logging.IsEnabled() {
 		if cfg.Logging.Destination == "file" || cfg.Logging.Destination == "" {
 			if logPath, logErr := cfg.Logging.GetLogPath(); logErr == nil {

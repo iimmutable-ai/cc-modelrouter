@@ -80,6 +80,7 @@ func (t *GLMAnthropicTransformer) PrepareRequest(req *anthropic.Request, baseURL
 	normalizeSingleElementContent(&reqCopy)
 	validateAndRepairBlocks(&reqCopy)
 	truncateToolNames(&reqCopy)
+	normalizeNullToolSchemas(&reqCopy)
 
 	// GLM-specific: Ensure signature field is present for thinking blocks
 	// We do this AFTER normalization to ensure signature is set
@@ -181,6 +182,18 @@ func truncateToolNames(req *anthropic.Request) {
 			hash := fmt.Sprintf("%x", sha256.Sum256([]byte(originalName)))[:6]
 			req.Tools[i].Name = originalName[:57] + "_" + hash
 			logging.StreamDebugf("[GLM] Truncated tool name (%d chars): %s -> %s", len(originalName), originalName, req.Tools[i].Name)
+		}
+	}
+}
+
+// normalizeNullToolSchemas replaces nil InputSchema with a minimal object schema.
+// BigModel's GLM-Anthropic API rejects "input_schema": null with HTTP 422
+// ("Input should be a valid dictionary"). Claude Code's internal web_search
+// tool legitimately sends null schemas, so coerce to {"type":"object"}.
+func normalizeNullToolSchemas(req *anthropic.Request) {
+	for i := range req.Tools {
+		if req.Tools[i].InputSchema == nil {
+			req.Tools[i].InputSchema = map[string]any{"type": "object"}
 		}
 	}
 }
