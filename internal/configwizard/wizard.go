@@ -96,10 +96,24 @@ func (m *WizardModel) contentWidth() int {
 	return w
 }
 
-// footline renders the help-text line with the version label appended.
-// `help` is the screen-specific keyboard-hint string (e.g. "[↑/↓] Navigate ...").
+// footline renders the screen-specific keyboard-hint line.
 func (m *WizardModel) footline(help string) string {
-	return HelpTextStyle.Width(m.contentWidth()).Render(help + "   ccrouter " + version.String())
+	return HelpTextStyle.Width(m.contentWidth()).Render(help)
+}
+
+// footlineWithVersion renders help text on the left and the version label
+// right-aligned. Used only on the main menu.
+func (m *WizardModel) footlineWithVersion(help string) string {
+	width := m.contentWidth()
+	versionStr := version.String()
+	helpWidth := runewidth.StringWidth(help)
+	versionWidth := runewidth.StringWidth(versionStr)
+	textArea := width - HelpTextStyle.GetHorizontalFrameSize()
+	padding := textArea - helpWidth - versionWidth
+	if padding < 1 {
+		padding = 1
+	}
+	return HelpTextStyle.Width(width).Render(help + strings.Repeat(" ", padding) + versionStr)
 }
 
 // NewWizardModel creates a new wizard model.
@@ -2558,7 +2572,7 @@ func (m *WizardModel) renderMainMenu() string {
 		m.blankLine(),
 		lipgloss.JoinVertical(lipgloss.Left, menuLines...),
 		m.blankLine(),
-		m.footline("[↑/↓] Navigate   [Enter] Select"),
+		m.footlineWithVersion("[↑/↓] Navigate   [Enter] Select"),
 	)
 
 	if m.state.HasUnsavedChanges() {

@@ -748,7 +748,7 @@ func (m *MonitorModel) renderStatusBar() string {
 	}
 
 	// Right-aligned version label
-	versionTag := "v" + version.String()
+	versionTag := version.String()
 	versionWidth := runewidth.StringWidth(versionTag)
 
 	// Calculate padding using visual width (subtract version space too)

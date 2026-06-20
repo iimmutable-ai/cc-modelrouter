@@ -22,7 +22,8 @@ func NewGenCommand() *cobra.Command {
 
 // NewGenSettingsCommand creates the gen settings command.
 func NewGenSettingsCommand() *cobra.Command {
-	var url, user, key, output string
+	var url, ip, user, key, output string
+	var port int
 
 	cmd := &cobra.Command{
 		Use:   "settings",
@@ -32,17 +33,26 @@ Claude Code to use the ccrouter proxy.
 
 The output uses Claude Code's env format with attribution disabled.
 
+By default the command prompts for deployment type (local vs public) and
+detects the server's public IP when "Public" is chosen. Pass --url or --ip
+to skip the prompt (scripting-friendly); in non-interactive sessions the
+command defaults to localhost with no network call.
+
 Examples:
   ccrouter gen settings --user alice
   ccrouter gen settings --key sk-ccr-abc123
+  ccrouter gen settings --ip 10.0.0.5 --port 8081    # offline / scripting
   ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGenSettings(url, user, key, output)
+			port, _ := cmd.Flags().GetInt("port")
+			return runGenSettings(url, ip, port, user, key, output)
 		},
 	}
 
-	cmd.Flags().StringVar(&url, "url", "http://localhost:8081", "Router URL")
+	cmd.Flags().StringVar(&url, "url", "", "Full router URL (overrides prompt and detection)")
+	cmd.Flags().StringVar(&ip, "ip", "", "Server IP (skips prompt and detection; offline-friendly)")
+	cmd.Flags().IntVarP(&port, "port", "p", 8081, "Router port")
 	cmd.Flags().StringVar(&user, "user", "", "Username to look up API key from keystore")
 	cmd.Flags().StringVar(&key, "key", "", "API key directly (overrides --user)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file path (default: stdout)")
@@ -50,7 +60,14 @@ Examples:
 	return cmd
 }
 
-func runGenSettings(url, user, key, output string) error {
+func runGenSettings(urlFlag, ipFlag string, port int, user, key, output string) error {
+	// Resolve the base URL: honor --url / --ip overrides, prompt only on TTY,
+	// never make a network call unless the user explicitly picks "Public".
+	baseURL, err := resolveServerAddress(urlFlag, ipFlag, port, os.Stdin, os.Stdout)
+	if err != nil {
+		return fmt.Errorf("failed to resolve server address: %w", err)
+	}
+
 	// Resolve the API key
 	apiKey := ""
 
@@ -73,7 +90,7 @@ func runGenSettings(url, user, key, output string) error {
 
 	// Build settings
 	env := map[string]string{
-		"ANTHROPIC_BASE_URL":                       url,
+		"ANTHROPIC_BASE_URL":                       baseURL,
 		"CLAUDE_CODE_ATTRIBUTION_HEADER":          "0",
 		"API_TIMEOUT_MS":                          "3000000",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
