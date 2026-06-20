@@ -186,24 +186,33 @@ export ANTHROPIC_BASE_URL=http://localhost:8081
 
 ### Generating Claude Code Settings
 
-Use `ccrouter gen settings` to generate a Claude Code `settings.local.json` that pre-configures the proxy URL and API key:
+Use `ccrouter gen settings` to generate a Claude Code `settings.local.json` that pre-configures the proxy URL and API key.
+
+By default the command is interactive (TTY): it prompts for deployment type (Local vs Public) and, when **Public** is chosen, detects the server's public IPv4 via `api.ipify.org` (3s timeout). Detection failure is never fatal — it falls back to `localhost`. In non-interactive sessions (piped stdin) it defaults to `localhost` and makes **no** network call. Pass `--url` or `--ip` to skip the prompt entirely (scripting/offline-friendly).
 
 ```bash
-# Generate for a specific user (looks up key from keystore)
+# Interactive: pick Local or Public (default Local)
 ccrouter gen settings --user alice
 
 # Generate with a key directly
 ccrouter gen settings --key sk-ccr-abc123
 
-# Write to a specific file
+# Scripting / offline: specify the IP explicitly, no prompt
+ccrouter gen settings --ip 10.0.0.5 --port 8081 --user alice
+
+# Full URL override (highest precedence, no prompt or detection)
 ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
 ```
+
+**Flag precedence** (first match wins): `--url` → `--ip` → non-TTY localhost default → TTY interactive prompt.
 
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--url` | `http://localhost:8081` | Router URL |
+| `--url` | *(prompted)* | Full router URL (overrides prompt and detection) |
+| `--ip` | *(prompted)* | Server IP (skips prompt and detection; offline-friendly) |
+| `-p`, `--port` | `8081` | Router port |
 | `--user` | | Username to look up API key from keystore |
 | `--key` | | API key directly (overrides `--user`) |
 | `-o` | stdout | Output file path |

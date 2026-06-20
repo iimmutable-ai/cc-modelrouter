@@ -325,6 +325,51 @@ ccrouter config
 
 ---
 
+### ccrouter gen
+
+Generate configuration files for Claude Code integration.
+
+```bash
+ccrouter gen settings [flags]
+```
+
+**Description:**
+- Generates a Claude Code `settings.local.json` / `settings.json` that points Claude Code at the router proxy and disables attribution
+- Interactive (TTY) by default: prompts for deployment type (**Local** vs **Public**)
+- When **Public** is chosen, detects the server's public IPv4 via `api.ipify.org` (3s timeout); detection failure falls back to `localhost` (never fatal)
+- Non-interactive (piped stdin): defaults to `localhost` with **no** network call
+- `--url` or `--ip` skips the prompt entirely (scripting / offline-friendly)
+- API key resolved from `--key` (direct) or `--user` (keystore lookup)
+
+**Flag precedence** (first match wins): `--url` → `--ip` → non-TTY localhost default → TTY interactive prompt.
+
+**Flags:**
+```
+      --url string        Full router URL (overrides prompt and detection)
+      --ip string         Server IP (skips prompt and detection; offline-friendly)
+  -p, --port int          Router port (default 8081)
+      --user string       Username to look up API key from keystore
+      --key string        API key directly (overrides --user)
+  -o, --output string     Output file path (default: stdout)
+```
+
+**Examples:**
+```bash
+# Interactive: pick Local or Public (default Local)
+ccrouter gen settings --user alice
+
+# Generate with a key directly
+ccrouter gen settings --key sk-ccr-abc123
+
+# Scripting / offline: specify the IP explicitly, no prompt
+ccrouter gen settings --ip 10.0.0.5 --port 8081 --user alice
+
+# Full URL override, write to a project-local file
+ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
+```
+
+---
+
 ### ccrouter profile
 
 Manage route profiles for switching between different route configurations during a session.
