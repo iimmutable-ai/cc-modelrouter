@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -204,4 +205,16 @@ func parseIntPort(s string) (int, error) {
 		return 0, fmt.Errorf("port out of range: %d", port)
 	}
 	return port, nil
+}
+
+// isLocalHostURL reports whether rawURL's host is a loopback address.
+// It is used to decide whether gen settings should emit the non-local
+// deployment warning (server must bind 0.0.0.0, firewalls must allow the port).
+func isLocalHostURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

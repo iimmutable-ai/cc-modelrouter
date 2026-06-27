@@ -260,6 +260,58 @@ This was caused by a race condition in server startup where the `Start()` method
 
 4. **See the troubleshooting steps above** for connection refused errors.
 
+## Remote Deployment (ConnectionRefused from a remote client)
+
+### Issue: Claude Code points at a public IP and gets `ConnectionRefused`; the ccrouter monitor shows zero inbound traffic
+
+**Symptoms:**
+- Client env sets `ANTHROPIC_BASE_URL=http://<public-ip>:8081` (e.g. produced by `ccrouter gen settings --ip <public-ip>`)
+- The client shows no response and, after a long timeout with retries, fails with `ConnectionRefused`
+- On the server, `ccrouter monitor` shows **no inbound traffic at all**
+
+**Root Cause:**
+ccrouter defaults `server.host` to `"localhost"`, so the listener is bound via
+`net.Listen("tcp", "localhost:8081")` to `127.0.0.1:8081` — loopback only. The
+remote client's SYN hits the server's public NIC, finds no listener, and the
+kernel returns RST. Nothing ever reaches the ccrouter process, which is why the
+monitor shows zero traffic. This is a bind-address / firewall mismatch, not an
+application-layer bug.
+
+**Fix — bind to all interfaces (pick one):**
+
+Option A — config (persistent):
+```json
+"server": { "host": "0.0.0.0", "port": 8081 }
+```
+then restart ccrouter.
+
+Option B — CLI flag (one-shot):
+```bash
+ccrouter start --host 0.0.0.0 --port 8081
+```
+
+**Two firewalls must allow inbound TCP on the port:**
+1. The cloud provider's security group / simple-application-server firewall
+   (separate admin panel from the OS — on Alibaba Cloud this is its own panel).
+2. The in-VM firewall: `ufw` / `firewalld` / iptables.
+
+**Verify on the server:**
+```bash
+sudo ss -tlnp | grep 8081          # MUST show 0.0.0.0:8081, not 127.0.0.1:8081
+```
+
+**Verify from a remote machine (must connect, not refuse):**
+```bash
+curl -v http://<public-ip>:8081/v1/models
+```
+Then re-run `claude` and confirm the ccrouter monitor now shows inbound traffic.
+
+**Security note:** binding `0.0.0.0` exposes the router to the internet. For any
+non-localhost deployment, rely on API-token authentication (multi-user mode /
+`ANTHROPIC_AUTH_TOKEN`) and restrict access via the cloud security group, or put
+the router behind a reverse proxy with TLS. The loopback default exists
+specifically to keep accidental exposure off by default.
+
 ## Thinking Block and Content Validation Errors (CRITICAL)
 
 ### Issue: "Invalid input: expected string, received array" from OpenRouter

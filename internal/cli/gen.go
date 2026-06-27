@@ -68,6 +68,18 @@ func runGenSettings(urlFlag, ipFlag string, port int, user, key, output string) 
 		return fmt.Errorf("failed to resolve server address: %w", err)
 	}
 
+	// Warn when the generated settings target a non-local address: the ccrouter
+	// server defaults to binding loopback, so a public/remote URL will produce
+	// ConnectionRefused at the client unless the server is reconfigured. Emitted
+	// to stderr so stdout JSON piping is unaffected.
+	if !isLocalHostURL(baseURL) {
+		fmt.Fprintf(os.Stderr, "WARNING: Generated settings target a non-local address (%s).\n", baseURL)
+		fmt.Fprintln(os.Stderr, `  For the client to connect, the ccrouter server MUST bind to 0.0.0.0:
+    ccrouter start --host 0.0.0.0 --port 8081
+  or set "server": {"host": "0.0.0.0"} in ~/.cc-modelrouter/config.json on the server.
+  Also allow inbound TCP on the port in the cloud security group and any in-VM firewall.`)
+	}
+
 	// Resolve the API key
 	apiKey := ""
 

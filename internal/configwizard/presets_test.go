@@ -217,6 +217,28 @@ func TestMergePresetFile_KeepsDstOnParseError(t *testing.T) {
 	}
 }
 
+// TestBigModelPresetBaseURL locks the canonical BigModel Anthropic-compatible
+// baseURL. The glm_anthropic transformer appends "/v1/messages" to the baseURL
+// when it does not already end with that suffix (glm_anthropic.go:117-118).
+// A bare "https://open.bigmodel.cn/api" therefore produces the non-existent
+// "/api/v1/messages" endpoint, which BigModel's gateway rejects with HTTP 403
+// permission_error. The correct path is "/api/anthropic", which yields
+// "/api/anthropic/v1/messages" — the documented Anthropic-compatible endpoint.
+// See docs/troubleshooting.md (BigModel section) and
+// https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.
+func TestBigModelPresetBaseURL(t *testing.T) {
+	bm, ok := ProviderPresets["bigmodel"]
+	if !ok {
+		t.Fatal("bigmodel preset missing from ProviderPresets")
+	}
+	const want = "https://open.bigmodel.cn/api/anthropic"
+	if bm.BaseURL != want {
+		t.Errorf("bigmodel baseURL = %q, want %q (transformer appends /v1/messages; "+
+			"bare /api yields non-existent /api/v1/messages → 403 permission_error)",
+			bm.BaseURL, want)
+	}
+}
+
 func TestMergePresetFile_ModelsSliceIsCopy(t *testing.T) {
 	// Verify the merged Models slice is a copy, not an alias into shared
 	// backing memory, so caller mutations stay isolated.
