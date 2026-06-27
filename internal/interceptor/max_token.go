@@ -5,8 +5,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // MaxTokenConfig holds configuration for max token limits by provider/model.

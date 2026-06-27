@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/monitor"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/monitor"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 	"github.com/spf13/cobra"
 	tea "github.com/charmbracelet/bubbletea"
 )

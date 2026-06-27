@@ -18,8 +18,8 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/iimmutable/cc-modelrouter/internal/version.Tag={{.Tag}}
-      - -X github.com/iimmutable/cc-modelrouter/internal/version.BuildTime={{ time "060102150405" }}
+      - -X github.com/iimmutable-ai/cc-modelrouter/internal/version.Tag={{.Tag}}
+      - -X github.com/iimmutable-ai/cc-modelrouter/internal/version.BuildTime={{ time "060102150405" }}
     flags:
       - -trimpath
 
@@ -54,7 +54,7 @@ changelog:
 
 release:
   github:
-    owner: iimmutable
+    owner: iimmutable-ai
     name: cc-modelrouter
   draft: false
   prerelease: auto

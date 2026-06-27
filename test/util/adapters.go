@@ -3,9 +3,9 @@
 package util
 
 import (
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/router"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/router"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
 )
 
 // RouterAdapter adapts router.Engine to proxy.RouteDetector interface.

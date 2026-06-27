@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // OpenRouterTransformer is a specialized transformer for OpenRouter.

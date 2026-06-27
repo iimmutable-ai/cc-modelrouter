@@ -1,4 +1,4 @@
-module github.com/iimmutable/cc-modelrouter
+module github.com/iimmutable-ai/cc-modelrouter
 
 go 1.24.2
 

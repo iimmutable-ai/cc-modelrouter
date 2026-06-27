@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // newTestModel creates a WizardModel with minimal setup for testing.

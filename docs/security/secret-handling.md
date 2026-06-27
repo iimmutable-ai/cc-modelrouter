@@ -61,7 +61,7 @@ func SanitizeHeadersString(headers http.Header) string
 
 **CORRECT - Sanitized logging:**
 ```go
-import "github.com/iimmutable/cc-modelrouter/internal/logging"
+import "github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 
 // For debug logging
 logging.Debugf("[PROXY REQUEST] URL: %s, Method: %s, Headers: %s",

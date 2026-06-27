@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
-	"github.com/iimmutable/cc-modelrouter/internal/version"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/version"
 	"github.com/mattn/go-runewidth"
 	lipgloss "github.com/charmbracelet/lipgloss"
 )

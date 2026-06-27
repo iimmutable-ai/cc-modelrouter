@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 func TestGeminiTransformer_Name(t *testing.T) {

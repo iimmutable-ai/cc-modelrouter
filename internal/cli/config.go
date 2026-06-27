@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/configwizard"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/configwizard"
 	"github.com/spf13/cobra"
 	tea "github.com/charmbracelet/bubbletea"
 )

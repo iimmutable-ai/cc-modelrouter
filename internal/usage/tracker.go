@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 )
 
 const (

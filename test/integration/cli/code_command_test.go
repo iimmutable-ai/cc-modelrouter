@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/test/util"
+	"github.com/iimmutable-ai/cc-modelrouter/test/util"
 )
 
 // TestCodeCommand tests the `ccrouter code` command end-to-end.

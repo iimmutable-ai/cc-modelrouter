@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // Compactor reduces request size to fit within provider limits.

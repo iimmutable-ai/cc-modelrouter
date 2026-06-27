@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/qos"
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/internal/router"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/qos"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/router"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 const (

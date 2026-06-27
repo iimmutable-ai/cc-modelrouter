@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 )
 
 // presetsFilename is the JSON file name used to override provider presets.
@@ -22,7 +22,7 @@ const presetsFilename = "provider-presets.json"
 // httptest.Server. On the first run of `ccrouter config`, if no global
 // presets file exists, the wizard fetches this URL and writes it to
 // ~/.cc-modelrouter/provider-presets.json.
-var defaultPresetsURL = "https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/presets/provider-presets.json"
+var defaultPresetsURL = "https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/presets/provider-presets.json"
 
 // ProviderPresets is the merged set of provider presets available to the
 // wizard. It is initialized at package load time by loadProviderPresets from:

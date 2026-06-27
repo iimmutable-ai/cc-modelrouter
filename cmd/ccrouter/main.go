@@ -2,7 +2,7 @@
 package main
 
 import (
-	"github.com/iimmutable/cc-modelrouter/internal/cli"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/cli"
 )
 
 func main() {

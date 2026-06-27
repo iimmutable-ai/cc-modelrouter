@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/test/util"
+	"github.com/iimmutable-ai/cc-modelrouter/test/util"
 )
 
 // Bigmodel models to test

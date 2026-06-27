@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/router"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/router"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // TestImageSizeSingleLargeImage tests handling of a single large image.

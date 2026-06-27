@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
-	"github.com/iimmutable/cc-modelrouter/internal/version"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/version"
 
 	"github.com/mattn/go-runewidth"
 

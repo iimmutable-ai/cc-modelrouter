@@ -3,14 +3,14 @@
 # install.sh — Install ccrouter binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh | bash
 #   bash install.sh --version vX.Y.Z -d /custom/path
 #
 # The first `ccrouter config` run auto-fetches provider presets from GitHub.
 
 set -euo pipefail
 
-REPO_OWNER="iimmutable"
+REPO_OWNER="iimmutable-ai"
 REPO_NAME="cc-modelrouter"
 BINARY_NAME="ccrouter"
 DEFAULT_VERSION=""  # empty = latest

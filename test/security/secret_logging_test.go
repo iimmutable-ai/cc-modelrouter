@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 )
 
 // Test_NoAPIKeyInLogs verifies API keys are never logged in plaintext.

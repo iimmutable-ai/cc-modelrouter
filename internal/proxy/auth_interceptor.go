@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 )
 
 // AuthError is returned by the auth interceptor to signal a 401 response.

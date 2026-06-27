@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 	tea "github.com/charmbracelet/bubbletea"
 	lipgloss "github.com/charmbracelet/lipgloss"
 )

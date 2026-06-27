@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 
-	"github.com/iimmutable/cc-modelrouter/internal/daemon"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

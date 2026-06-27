@@ -130,7 +130,7 @@ Tests the buffer flush mechanism.
     usage_tracking_test.go:553: ✓ Buffered flush verified: 4 records written
 --- PASS: TestUsageTrackingBufferedFlush (0.11s)
 PASS
-ok  	github.com/iimmutable/cc-modelrouter/test/integration	4.281s
+ok  	github.com/iimmutable-ai/cc-modelrouter/test/integration	4.281s
 ```
 
 ## Configuration

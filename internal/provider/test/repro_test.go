@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/provider"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/provider"
 )
 
 // TestRepro_ProviderClientRetry tests if the HTTP client properly handles

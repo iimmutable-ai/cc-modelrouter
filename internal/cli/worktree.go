@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 )
 
 // propagateSettingsToWorktrees writes settings.local.json and profile.md

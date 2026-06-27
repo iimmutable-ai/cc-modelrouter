@@ -9,9 +9,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // GeminiTransformer transforms requests to Google Gemini API format.

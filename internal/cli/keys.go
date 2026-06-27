@@ -6,8 +6,8 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 	"github.com/spf13/cobra"
 )
 

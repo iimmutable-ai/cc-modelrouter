@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	transformers "github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // TestError1213Reproduction reproduces the BigModel error 1213 "未正常接收到prompt参数".

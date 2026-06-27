@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/cli"
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/proxy"
-	"github.com/iimmutable/cc-modelrouter/internal/router"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/cli"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/proxy"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/router"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	transformers "github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
 )
 
 // TestIntegrationStreamingSSE tests that the streaming handler properly

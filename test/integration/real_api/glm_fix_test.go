@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/test/util"
+	"github.com/iimmutable-ai/cc-modelrouter/test/util"
 )
 
 // TestGLMMultipleTextBlocks tests the fix for GLM 400 Bad Request error.

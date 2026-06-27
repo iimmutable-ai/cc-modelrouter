@@ -3,10 +3,10 @@ package cli
 import (
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/router"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/router"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	transformers "github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
 )
 
 func TestNewRouterAdapter(t *testing.T) {

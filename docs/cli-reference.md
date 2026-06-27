@@ -5,19 +5,19 @@
 **Recommended (curl):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh | bash
 ```
 
 **Alternative (Go users):**
 
 ```bash
-go install github.com/iimmutable/cc-modelrouter/cmd/ccrouter@latest
+go install github.com/iimmutable-ai/cc-modelrouter/cmd/ccrouter@latest
 ```
 
 **From source:**
 
 ```bash
-git clone https://github.com/iimmutable/cc-modelrouter
+git clone https://github.com/iimmutable-ai/cc-modelrouter
 cd cc-modelrouter
 make install
 ```
@@ -859,7 +859,7 @@ When you run `ccrouter config` and `~/.cc-modelrouter/provider-presets.json`
 does not exist, the wizard fetches the canonical presets from GitHub:
 
 ```
-https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/presets/provider-presets.json
+https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/presets/provider-presets.json
 ```
 
 The file is written to `~/.cc-modelrouter/provider-presets.json` with `0600`

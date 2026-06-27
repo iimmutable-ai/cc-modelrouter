@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	transformers "github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // TestAnthropicTransformer tests the Anthropic transformer with the new interface.

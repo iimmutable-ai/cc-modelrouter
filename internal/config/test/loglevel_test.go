@@ -3,7 +3,7 @@ package config_test
 import (
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 func TestLogLevelString(t *testing.T) {

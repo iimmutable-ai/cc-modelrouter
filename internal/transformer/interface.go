@@ -4,7 +4,7 @@ package transformer
 import (
 	"net/http"
 
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // SSEEvent represents a complete server-sent event with type and data.

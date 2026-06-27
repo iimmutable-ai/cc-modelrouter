@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // TestConnectionResult contains the result of a connection test.
@@ -205,7 +205,7 @@ func buildOpenRouterTestRequest(url, apiKey, model string) (*http.Request, error
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-	req.Header.Set("HTTP-Referer", "https://github.com/iimmutable/cc-modelrouter")
+	req.Header.Set("HTTP-Referer", "https://github.com/iimmutable-ai/cc-modelrouter")
 	req.Header.Set("X-Title", "cc-modelrouter")
 	return req, nil
 }

@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/provider"
-	"github.com/iimmutable/cc-modelrouter/internal/proxy"
-	"github.com/iimmutable/cc-modelrouter/internal/router"
-	"github.com/iimmutable/cc-modelrouter/internal/transformer"
-	transformers "github.com/iimmutable/cc-modelrouter/internal/transformer/transformers"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/provider"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/proxy"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/router"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
+	transformers "github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 )
 
 // eventually polls a condition until it becomes true or times out.

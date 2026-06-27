@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // newProfileTestModel creates a WizardModel with profiles support.

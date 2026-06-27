@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 func TestRouteDetection(t *testing.T) {

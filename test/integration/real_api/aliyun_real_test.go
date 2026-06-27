@@ -6,7 +6,7 @@ package real_api
 import (
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/test/util"
+	"github.com/iimmutable-ai/cc-modelrouter/test/util"
 )
 
 // ========================================

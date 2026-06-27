@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbletea"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 	lipgloss "github.com/charmbracelet/lipgloss"
 )
 

@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 )
 
 // StatsPoller polls the database for usage stats

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // TestOpenRouterFix_InvalidSignatureError tests the fix for the "Invalid signature in

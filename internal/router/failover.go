@@ -1,7 +1,7 @@
 package router
 
 import (
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // Target represents a route target.

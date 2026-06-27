@@ -3,7 +3,7 @@ package proxy
 import (
 	"net/http"
 
-	"github.com/iimmutable/cc-modelrouter/internal/qos"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/qos"
 )
 
 // QoSInterceptor wraps the QoS engine for use as a request gate.

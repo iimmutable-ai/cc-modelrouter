@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // deepCopyRequestGob is an alternative gob-based deep copy, benchmarked but

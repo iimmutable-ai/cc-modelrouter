@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	"github.com/sirupsen/logrus"
 )
 

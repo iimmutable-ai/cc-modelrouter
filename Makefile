@@ -12,8 +12,8 @@ TAG ?= dev
 else
 TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.1.0)
 endif
-LDFLAGS := -X github.com/iimmutable/cc-modelrouter/internal/version.Tag=$(TAG) \
-           -X github.com/iimmutable/cc-modelrouter/internal/version.BuildTime=$(BUILDTIME)
+LDFLAGS := -X github.com/iimmutable-ai/cc-modelrouter/internal/version.Tag=$(TAG) \
+           -X github.com/iimmutable-ai/cc-modelrouter/internal/version.BuildTime=$(BUILDTIME)
 
 build:
 	go build -ldflags="$(LDFLAGS)" -o bin/debug/$(BINARY) $(CMD_DIR)

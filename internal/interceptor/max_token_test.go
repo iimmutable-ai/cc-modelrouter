@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 func TestNewMaxTokenInterceptor(t *testing.T) {

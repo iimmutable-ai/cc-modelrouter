@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/daemon"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/daemon"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 	"github.com/spf13/cobra"
 )
 

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
-	"github.com/iimmutable/cc-modelrouter/internal/daemon"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

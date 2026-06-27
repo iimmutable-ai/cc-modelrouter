@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // Screen represents the current screen in the wizard.

@@ -154,7 +154,7 @@ if te.EventType == "message_delta" {
 **Always use sanitization library:**
 
 ```go
-import "github.com/iimmutable/cc-modelrouter/internal/logging"
+import "github.com/iimmutable-ai/cc-modelrouter/internal/logging"
 
 // ✅ CORRECT - Headers are sanitized:
 logging.Debugf("[PROXY REQUEST] Headers: %s", logging.SanitizeHeadersString(req.Header))

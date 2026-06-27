@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/iimmutable/cc-modelrouter/internal/auth"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
 	"github.com/spf13/cobra"
 )
 

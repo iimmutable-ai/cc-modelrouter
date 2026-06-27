@@ -2,7 +2,7 @@
 package util
 
 import (
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // TestConfigBuilder helps build test configurations.

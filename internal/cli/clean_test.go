@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/internal/daemon"
-	"github.com/iimmutable/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/daemon"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 )
 
 // captureStdout captures stdout during command execution

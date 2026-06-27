@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	"github.com/sirupsen/logrus"
 )
 

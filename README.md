@@ -1,8 +1,8 @@
 # cc-modelrouter
 
 [![Go 1.24](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go)](https://go.dev)
-[![Go Report Card](https://goreportcard.com/badge/github.com/iimmutable/cc-modelrouter)](https://goreportcard.com/report/github.com/iimmutable/cc-modelrouter)
-[![CI](https://github.com/iimmutable/cc-modelrouter/actions/workflows/ci.yml/badge.svg)](https://github.com/iimmutable/cc-modelrouter/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/iimmutable-ai/cc-modelrouter)](https://goreportcard.com/report/github.com/iimmutable-ai/cc-modelrouter)
+[![CI](https://github.com/iimmutable-ai/cc-modelrouter/actions/workflows/ci.yml/badge.svg)](https://github.com/iimmutable-ai/cc-modelrouter/actions/workflows/ci.yml)
 
 **A local API gateway for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that routes requests to any LLM provider — GLM, GPT, Claude, Gemini, Kimi, Qwen, and more.**
 
@@ -44,19 +44,19 @@ Runs locally on localhost. API keys never leave your machine. Admin API is token
 **Recommended (curl):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/iimmutable/cc-modelrouter/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh | bash
 ```
 
 **Alternative (Go users):**
 
 ```bash
-go install github.com/iimmutable/cc-modelrouter/cmd/ccrouter@latest
+go install github.com/iimmutable-ai/cc-modelrouter/cmd/ccrouter@latest
 ```
 
 **From source:**
 
 ```bash
-git clone https://github.com/iimmutable/cc-modelrouter
+git clone https://github.com/iimmutable-ai/cc-modelrouter
 cd cc-modelrouter
 make install
 ```
@@ -137,10 +137,12 @@ See [docs/configuration.md](docs/configuration.md) for the full configuration re
 | **Zhipu GLM** (bigmodel) | Direct | glm-4.6v, glm-4.7, glm-5-turbo, glm-5v-turbo, glm-5.1, glm-5.2 |
 | **Anthropic** | Direct | claude-haiku-4.5, claude-sonnet-4.6, claude-opus-4.5, claude-opus-4.6 |
 | **OpenRouter** | Aggregator | openai/gpt-5.4, openai/gpt-5.4-mini, openai/gpt-5.3-codex, google/gemini-2.5-flash, google/gemini-2.5-pro |
+| **OpenRouter (Anthropic)** | Aggregator | anthropic/claude-haiku-4.5, anthropic/claude-sonnet-4.5, anthropic/claude-sonnet-4.6, anthropic/claude-opus-4.5, anthropic/claude-opus-4.6 |
+| **OpenRouter (OpenAI)** | Aggregator | openai/gpt-5.4, openai/gpt-5.4-mini, openai/gpt-5.3-codex |
 | **Aliyun DashScope** (alicloud) | Aggregator | MiniMax-M2.5, kimi-k2.5, qwen3-coder-plus, glm-5, glm-4.7, qwen3.7-plus, glm-5.1, glm-5.2, kimi-k2.6 |
 | **Google Gemini** | Direct | gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash |
 
-OpenRouter provides access to Anthropic, OpenAI, and Google models through a single API key.
+OpenRouter provides access to Anthropic, OpenAI, and Google models through a single API key. The `openrouter-anthropic` and `openrouter-openai` presets are filtered variants for use when you want to restrict the wizard's model picker to a single vendor family.
 
 ## Smart Routing
 
@@ -215,7 +217,7 @@ ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
 | `-p`, `--port` | `8081` | Router port |
 | `--user` | | Username to look up API key from keystore |
 | `--key` | | API key directly (overrides `--user`) |
-| `-o` | stdout | Output file path |
+| `-o`, `--output` | stdout | Output file path |
 
 For team setups with multiple users, see [Multi-User Mode](#multi-user-mode).
 
@@ -477,8 +479,11 @@ When multi-user mode is enabled, three additional tabs are available:
 | `ccrouter code` | Start router + launch Claude Code (auto permissions) |
 | `ccrouter start` | Start standalone router |
 | `ccrouter stop [id]` | Stop instance (all if no ID) |
+| `ccrouter restart [id]` | Restart a router instance |
 | `ccrouter status` | Show running instances |
+| `ccrouter clean` | Remove stale instance files |
 | `ccrouter config` | Interactive config wizard (TUI) |
+| `ccrouter logs [id]` | Show instance logs |
 | `ccrouter monitor` | Live usage monitor (TUI) |
 | `ccrouter profile list` | List route profiles |
 | `ccrouter profile switch <name>` | Switch profile |

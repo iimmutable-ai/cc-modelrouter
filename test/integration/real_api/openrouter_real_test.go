@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/test/util"
+	"github.com/iimmutable-ai/cc-modelrouter/test/util"
 )
 
 // OpenRouter models to test

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // TestFilesAPITypes tests that Files API types can be marshaled/unmarshaled correctly.

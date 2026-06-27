@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/iimmutable/cc-modelrouter/internal/logging"
-	"github.com/iimmutable/cc-modelrouter/pkg/api/anthropic"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"github.com/iimmutable-ai/cc-modelrouter/pkg/api/anthropic"
 )
 
 // ReasoningConfig holds configuration for reasoning content extraction.

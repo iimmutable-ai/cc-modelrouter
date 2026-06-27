@@ -4,7 +4,7 @@ package router
 import (
 	"sync"
 
-	"github.com/iimmutable/cc-modelrouter/internal/config"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 const (

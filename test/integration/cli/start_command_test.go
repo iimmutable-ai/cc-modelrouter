@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iimmutable/cc-modelrouter/test/util"
+	"github.com/iimmutable-ai/cc-modelrouter/test/util"
 )
 
 // findProjectRoot walks up from the test file directory to find the project root (where go.mod is).
