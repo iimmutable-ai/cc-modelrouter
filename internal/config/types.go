@@ -84,6 +84,9 @@ type ServerConfig struct {
 	// AutoRestartBackoffMax is the cap on a random delay applied after idle fires
 	// and before the restart. Empty/0 = no backoff.
 	AutoRestartBackoffMax string `json:"autoRestartBackoffMax,omitempty"`
+	// UserAgent overrides the User-Agent header sent to providers. Empty = use the
+	// default that mimics the @anthropic-ai/sdk User-Agent Claude Code sends.
+	UserAgent string `json:"userAgent,omitempty"`
 }
 
 // GetAutoRestartIdle parses AutoRestartIdle as a duration. Returns 0 (disabled)

@@ -189,11 +189,11 @@ func TestSanitizeHeadersString(t *testing.T) {
 		{
 			name: "preserves_safe_headers",
 			headers: http.Header{
-				"User-Agent":          {"cc-modelrouter/1.0"},
+				"User-Agent":          {"test-router/9.9"},
 				"Anthropic-Version":   {"2023-06-01"},
 			},
 			mustNotContain: []string{},
-			mustContain:    []string{"User-Agent", "cc-modelrouter/1.0", "Anthropic-Version", "2023-06-01"},
+			mustContain:    []string{"User-Agent", "test-router/9.9", "Anthropic-Version", "2023-06-01"},
 		},
 	}
 

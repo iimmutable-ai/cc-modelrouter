@@ -4,16 +4,33 @@ package transformer
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/useragent"
 )
 
 // BaseTransformer provides common utilities for transformers.
 type BaseTransformer struct {
-	name string
+	name      string
+	userAgent string
 }
 
 // NewBaseTransformer creates a new base transformer.
 func NewBaseTransformer(name string) *BaseTransformer {
-	return &BaseTransformer{name: name}
+	return &BaseTransformer{name: name, userAgent: useragent.Default()}
+}
+
+// UserAgent returns the User-Agent header value this transformer sends to its
+// provider. Defaults to the Claude Code SDK UA; override via SetUserAgent.
+func (b *BaseTransformer) UserAgent() string {
+	if b.userAgent != "" {
+		return b.userAgent
+	}
+	return useragent.Default()
+}
+
+// SetUserAgent overrides the User-Agent header value sent on outbound requests.
+func (b *BaseTransformer) SetUserAgent(ua string) {
+	b.userAgent = ua
 }
 
 // Name returns the transformer name.

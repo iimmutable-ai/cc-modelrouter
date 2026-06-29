@@ -118,7 +118,7 @@ func (t *GLMAnthropicTransformer) PrepareRequest(req *anthropic.Request, baseURL
 		endpoint = baseURL + "/v1/messages"
 	}
 
-	logging.StreamDebugf("[GLM REQUEST] URL: %s, Headers: x-api-key=<redacted>, anthropic-version=2023-06-01, User-Agent=cc-modelrouter/1.0", endpoint)
+	logging.StreamDebugf("[GLM REQUEST] URL: %s, Headers: x-api-key=<redacted>, anthropic-version=2023-06-01, User-Agent=%s", endpoint, t.UserAgent())
 
 	// Create HTTP request
 	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
@@ -142,7 +142,7 @@ func (t *GLMAnthropicTransformer) PrepareRequest(req *anthropic.Request, baseURL
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	httpReq.Header.Set("User-Agent", "cc-modelrouter/1.0")
+	httpReq.Header.Set("User-Agent", t.UserAgent())
 	httpReq.Header.Set("Accept", "application/json")
 
 	return httpReq, nil

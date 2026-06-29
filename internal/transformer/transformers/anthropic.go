@@ -325,7 +325,7 @@ func (t *AnthropicTransformer) PrepareRequest(req *anthropic.Request, baseURL, a
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	httpReq.Header.Set("User-Agent", "cc-modelrouter/1.0")
+	httpReq.Header.Set("User-Agent", t.UserAgent())
 	httpReq.Header.Set("Accept", "application/json")
 
 	return httpReq, nil

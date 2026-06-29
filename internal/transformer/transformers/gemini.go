@@ -132,7 +132,7 @@ func (t *GeminiTransformer) PrepareRequest(req *anthropic.Request, baseURL, apiK
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("User-Agent", "cc-modelrouter/1.0")
+	httpReq.Header.Set("User-Agent", t.UserAgent())
 	httpReq.Header.Set("Accept", "application/json")
 
 	return httpReq, nil

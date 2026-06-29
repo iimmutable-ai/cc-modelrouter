@@ -23,6 +23,7 @@ import (
 	"github.com/iimmutable-ai/cc-modelrouter/internal/transformer"
 	transformers "github.com/iimmutable-ai/cc-modelrouter/internal/transformer/transformers"
 	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
+	"github.com/iimmutable-ai/cc-modelrouter/internal/useragent"
 	"github.com/iimmutable-ai/cc-modelrouter/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -266,12 +267,22 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Setup transformer registry
 	registry := transformer.NewRegistry()
-	// New transformers (Anthropic-centric interface)
-	registry.Register(transformers.NewAnthropicTransformer())
-	registry.Register(transformers.NewGLMAnthropicTransformer())
-	registry.Register(transformers.NewOpenRouterTransformer())
-	registry.Register(transformers.NewOpenAITransformer())
-	registry.Register(transformers.NewGeminiTransformer())
+	// New transformers (Anthropic-centric interface). User-Agent is resolved
+	// once from cfg.Server.UserAgent (defaults to the Claude Code SDK UA).
+	resolvedUA := useragent.Resolve(cfg.Server.UserAgent)
+	for _, tf := range []interface {
+		transformer.Transformer
+		SetUserAgent(string)
+	}{
+		transformers.NewAnthropicTransformer(),
+		transformers.NewGLMAnthropicTransformer(),
+		transformers.NewOpenRouterTransformer(),
+		transformers.NewOpenAITransformer(),
+		transformers.NewGeminiTransformer(),
+	} {
+		tf.SetUserAgent(resolvedUA)
+		registry.Register(tf)
+	}
 	// Note: Qwen and MiniMax now use the Anthropic transformer since they are Anthropic-compatible
 	// GLM providers (aliyun, bigmodel) use the GLM-specific transformer which ensures signature field handling
 	// OpenRouter providers use the OpenRouter-specific transformer which preserves signature fields
