@@ -641,6 +641,39 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 				m.state.HasChanges = true
 			}
 		}
+		if v := strings.TrimSpace(m.state.ServerAutoRestartIdle); v != "" {
+			if _, err := time.ParseDuration(v); err == nil {
+				m.state.Config.Server.AutoRestartIdle = v
+				m.state.HasChanges = true
+			}
+		} else {
+			m.state.Config.Server.AutoRestartIdle = ""
+		}
+		if v := strings.TrimSpace(m.state.ServerAutoRestartWindow); v != "" {
+			parts := strings.Split(v, "-")
+			if len(parts) == 2 && timeParseHHMM(parts[0]) && timeParseHHMM(parts[1]) {
+				m.state.Config.Server.AutoRestartWindow = v
+				m.state.HasChanges = true
+			}
+		} else {
+			m.state.Config.Server.AutoRestartWindow = ""
+		}
+		if v := strings.TrimSpace(m.state.ServerAutoRestartTimezone); v != "" {
+			if _, err := time.LoadLocation(v); err == nil {
+				m.state.Config.Server.AutoRestartTimezone = v
+				m.state.HasChanges = true
+			}
+		} else {
+			m.state.Config.Server.AutoRestartTimezone = ""
+		}
+		if v := strings.TrimSpace(m.state.ServerAutoRestartBackoffMax); v != "" {
+			if _, err := time.ParseDuration(v); err == nil {
+				m.state.Config.Server.AutoRestartBackoffMax = v
+				m.state.HasChanges = true
+			}
+		} else {
+			m.state.Config.Server.AutoRestartBackoffMax = ""
+		}
 		m.state.PortStatus = ""
 		m.state.ProviderCursor = m.state.MainMenuCursor
 		m.state.CurrentScreen = ScreenMainMenu
@@ -1190,6 +1223,10 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 		m.state.ServerPort = strconv.Itoa(m.state.Config.Server.Port)
 		m.state.ServerMaxRetries = strconv.Itoa(m.state.Config.Router.MaxRetries)
 		m.state.ServerRetryDelay = m.state.Config.Router.RetryDelay
+		m.state.ServerAutoRestartIdle = m.state.Config.Server.AutoRestartIdle
+		m.state.ServerAutoRestartWindow = m.state.Config.Server.AutoRestartWindow
+		m.state.ServerAutoRestartTimezone = m.state.Config.Server.AutoRestartTimezone
+		m.state.ServerAutoRestartBackoffMax = m.state.Config.Server.AutoRestartBackoffMax
 		m.state.PortStatus = ""
 		m.state.CurrentScreen = ScreenServer
 		return m, m.checkPortAvailability()
@@ -1582,10 +1619,56 @@ func (m *WizardModel) handleServerSave() (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Save auto-restart settings (non-fatal: invalid values are skipped with a message)
+	if v := strings.TrimSpace(m.state.ServerAutoRestartIdle); v != "" {
+		if _, err := time.ParseDuration(v); err == nil {
+			m.state.Config.Server.AutoRestartIdle = v
+		} else {
+			m.state.ErrorMessage = "Auto-restart idle is not a valid duration; skipped"
+		}
+	} else {
+		m.state.Config.Server.AutoRestartIdle = ""
+	}
+	if v := strings.TrimSpace(m.state.ServerAutoRestartWindow); v != "" {
+		parts := strings.Split(v, "-")
+		if len(parts) == 2 &&
+			timeParseHHMM(parts[0]) && timeParseHHMM(parts[1]) {
+			m.state.Config.Server.AutoRestartWindow = v
+		} else {
+			m.state.ErrorMessage = "Auto-restart window must be HH:MM-HH:MM; skipped"
+		}
+	} else {
+		m.state.Config.Server.AutoRestartWindow = ""
+	}
+	if v := strings.TrimSpace(m.state.ServerAutoRestartTimezone); v != "" {
+		if _, err := time.LoadLocation(v); err == nil {
+			m.state.Config.Server.AutoRestartTimezone = v
+		} else {
+			m.state.ErrorMessage = "Auto-restart timezone is not a known IANA zone; skipped"
+		}
+	} else {
+		m.state.Config.Server.AutoRestartTimezone = ""
+	}
+	if v := strings.TrimSpace(m.state.ServerAutoRestartBackoffMax); v != "" {
+		if _, err := time.ParseDuration(v); err == nil {
+			m.state.Config.Server.AutoRestartBackoffMax = v
+		} else {
+			m.state.ErrorMessage = "Auto-restart backoff max is not a valid duration; skipped"
+		}
+	} else {
+		m.state.Config.Server.AutoRestartBackoffMax = ""
+	}
+
 	m.state.HasChanges = true
 	m.state.CurrentScreen = ScreenMainMenu
 	m.state.ErrorMessage = ""
 	return m, nil
+}
+
+// timeParseHHMM reports whether s parses as a "HH:MM" time-of-day.
+func timeParseHHMM(s string) bool {
+	_, err := time.Parse("15:04", strings.TrimSpace(s))
+	return err == nil
 }
 
 func (m *WizardModel) handleLoggingSave() (tea.Model, tea.Cmd) {
@@ -1897,6 +1980,38 @@ func (m *WizardModel) handleServerInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if len(msg.String()) == 1 {
 			m.state.ServerRetryDelay += msg.String()
 		}
+	case 4: // AutoRestartIdle
+		if msg.String() == "backspace" && len(m.state.ServerAutoRestartIdle) > 0 {
+			m.state.ServerAutoRestartIdle = m.state.ServerAutoRestartIdle[:len(m.state.ServerAutoRestartIdle)-1]
+		} else if msg.Paste {
+			m.state.ServerAutoRestartIdle += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerAutoRestartIdle += msg.String()
+		}
+	case 5: // AutoRestartWindow
+		if msg.String() == "backspace" && len(m.state.ServerAutoRestartWindow) > 0 {
+			m.state.ServerAutoRestartWindow = m.state.ServerAutoRestartWindow[:len(m.state.ServerAutoRestartWindow)-1]
+		} else if msg.Paste {
+			m.state.ServerAutoRestartWindow += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerAutoRestartWindow += msg.String()
+		}
+	case 6: // AutoRestartTimezone
+		if msg.String() == "backspace" && len(m.state.ServerAutoRestartTimezone) > 0 {
+			m.state.ServerAutoRestartTimezone = m.state.ServerAutoRestartTimezone[:len(m.state.ServerAutoRestartTimezone)-1]
+		} else if msg.Paste {
+			m.state.ServerAutoRestartTimezone += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerAutoRestartTimezone += msg.String()
+		}
+	case 7: // AutoRestartBackoffMax
+		if msg.String() == "backspace" && len(m.state.ServerAutoRestartBackoffMax) > 0 {
+			m.state.ServerAutoRestartBackoffMax = m.state.ServerAutoRestartBackoffMax[:len(m.state.ServerAutoRestartBackoffMax)-1]
+		} else if msg.Paste {
+			m.state.ServerAutoRestartBackoffMax += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerAutoRestartBackoffMax += msg.String()
+		}
 	}
 	return m, nil
 }
@@ -1976,7 +2091,7 @@ func (m *WizardModel) getMaxFields() int {
 	case ScreenAddProvider2:
 		return 1
 	case ScreenServer:
-		return 4
+		return 8
 	case ScreenLogging:
 		return 4
 	case ScreenEditRoute:
@@ -3940,7 +4055,39 @@ func (m *WizardModel) renderServer() string {
 		retryDelayInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(retryDelayInput)
 	}
 
-	note := MenuItemDimmedStyle.Render("Note: Port must be 1024-65535 · Retry delay uses Go duration format")
+	autoRestartIdleLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Idle (e.g. 30m, 2h; empty=off):")
+	autoRestartIdleInput := m.state.ServerAutoRestartIdle
+	if m.focusedField == 4 {
+		autoRestartIdleInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartIdleInput + "_")
+	} else {
+		autoRestartIdleInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartIdleInput)
+	}
+
+	autoRestartWindowLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Window (HH:MM-HH:MM; empty=always):")
+	autoRestartWindowInput := m.state.ServerAutoRestartWindow
+	if m.focusedField == 5 {
+		autoRestartWindowInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartWindowInput + "_")
+	} else {
+		autoRestartWindowInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartWindowInput)
+	}
+
+	autoRestartTimezoneLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Timezone (IANA, e.g. Asia/Shanghai; empty=Local):")
+	autoRestartTimezoneInput := m.state.ServerAutoRestartTimezone
+	if m.focusedField == 6 {
+		autoRestartTimezoneInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartTimezoneInput + "_")
+	} else {
+		autoRestartTimezoneInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartTimezoneInput)
+	}
+
+	autoRestartBackoffLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Backoff Max (e.g. 10m; empty=none):")
+	autoRestartBackoffInput := m.state.ServerAutoRestartBackoffMax
+	if m.focusedField == 7 {
+		autoRestartBackoffInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartBackoffInput + "_")
+	} else {
+		autoRestartBackoffInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartBackoffInput)
+	}
+
+	note := MenuItemDimmedStyle.Render("Note: Port 1024-65535 · Durations use Go format · Window is HH:MM-HH:MM in configured tz")
 	if m.state.PortTesting {
 		note = lipgloss.JoinHorizontal(lipgloss.Left, note, "  ", StatusPendingStyle.Render("Testing port..."))
 	} else if m.state.PortStatus != "" {
@@ -3964,6 +4111,14 @@ func (m *WizardModel) renderServer() string {
 		retriesLabel, m.fullWidth(retriesInput),
 		m.blankLine(),
 		retryDelayLabel, m.fullWidth(retryDelayInput),
+		m.blankLine(),
+		autoRestartIdleLabel, m.fullWidth(autoRestartIdleInput),
+		m.blankLine(),
+		autoRestartWindowLabel, m.fullWidth(autoRestartWindowInput),
+		m.blankLine(),
+		autoRestartTimezoneLabel, m.fullWidth(autoRestartTimezoneInput),
+		m.blankLine(),
+		autoRestartBackoffLabel, m.fullWidth(autoRestartBackoffInput),
 		m.blankLine(),
 		note,
 		m.blankLine(),

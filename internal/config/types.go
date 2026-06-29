@@ -72,6 +72,88 @@ type ProfileConfig struct {
 type ServerConfig struct {
 	Port int    `json:"port"`
 	Host string `json:"host"`
+	// AutoRestartIdle enables self-restart after the server is idle (no requests
+	// and zero in-flight connections) for the given duration. Empty = disabled.
+	AutoRestartIdle string `json:"autoRestartIdle,omitempty"`
+	// AutoRestartWindow restricts restart to a time-of-day range "HH:MM-HH:MM"
+	// interpreted in AutoRestartTimezone. Empty = always eligible.
+	AutoRestartWindow string `json:"autoRestartWindow,omitempty"`
+	// AutoRestartTimezone is an IANA timezone name (e.g. "Asia/Shanghai") used to
+	// evaluate AutoRestartWindow. Empty = server local time.
+	AutoRestartTimezone string `json:"autoRestartTimezone,omitempty"`
+	// AutoRestartBackoffMax is the cap on a random delay applied after idle fires
+	// and before the restart. Empty/0 = no backoff.
+	AutoRestartBackoffMax string `json:"autoRestartBackoffMax,omitempty"`
+}
+
+// GetAutoRestartIdle parses AutoRestartIdle as a duration. Returns 0 (disabled)
+// on empty string or parse error.
+func (sc *ServerConfig) GetAutoRestartIdle() time.Duration {
+	if sc.AutoRestartIdle == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(sc.AutoRestartIdle)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+// GetAutoRestartWindow parses AutoRestartWindow as "HH:MM-HH:MM" (24h, strict
+// 2-digit hour and minute). Returns enabled=false if empty or malformed.
+// Supports overnight wrap (e.g. "23:00-04:00").
+func (sc *ServerConfig) GetAutoRestartWindow() (start, end time.Duration, enabled bool) {
+	if sc.AutoRestartWindow == "" {
+		return 0, 0, false
+	}
+	parts := strings.Split(sc.AutoRestartWindow, "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	startStr := strings.TrimSpace(parts[0])
+	endStr := strings.TrimSpace(parts[1])
+	// time.Parse("15:04", ...) is lenient about single-digit hours (it accepts
+	// "1:00"), so enforce strict HH:MM via length check before parsing.
+	if len(startStr) != 5 || len(endStr) != 5 {
+		return 0, 0, false
+	}
+	s, err := time.Parse("15:04", startStr)
+	if err != nil {
+		return 0, 0, false
+	}
+	e, err := time.Parse("15:04", endStr)
+	if err != nil {
+		return 0, 0, false
+	}
+	start = time.Duration(s.Hour())*time.Hour + time.Duration(s.Minute())*time.Minute
+	end = time.Duration(e.Hour())*time.Hour + time.Duration(e.Minute())*time.Minute
+	return start, end, true
+}
+
+// GetAutoRestartTimezone loads AutoRestartTimezone as an IANA location.
+// Returns time.Local on empty string or unknown zone.
+func (sc *ServerConfig) GetAutoRestartTimezone() *time.Location {
+	if sc.AutoRestartTimezone == "" {
+		return time.Local
+	}
+	loc, err := time.LoadLocation(sc.AutoRestartTimezone)
+	if err != nil {
+		return time.Local
+	}
+	return loc
+}
+
+// GetAutoRestartBackoffMax parses AutoRestartBackoffMax as a duration.
+// Returns 0 (no backoff) on empty string or parse error.
+func (sc *ServerConfig) GetAutoRestartBackoffMax() time.Duration {
+	if sc.AutoRestartBackoffMax == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(sc.AutoRestartBackoffMax)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // CompactionConfig controls how oversized requests are compacted to fit within provider limits.

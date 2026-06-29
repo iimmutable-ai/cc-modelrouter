@@ -77,6 +77,7 @@ go test -v ./test/security
 ~/.cc-modelrouter/usage.db             # SQLite usage tracking
 ~/.cc-modelrouter/logs/inst_*.log      # Instance logs
 ~/.cc-modelrouter/instances/*.json     # Instance metadata
+~/.cc-modelrouter/restarts.jsonl       # Auto-restart outcome log (append-only)
 ```
 
 ---

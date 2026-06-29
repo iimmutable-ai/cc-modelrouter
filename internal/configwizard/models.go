@@ -82,6 +82,10 @@ type WizardState struct {
 	ServerPort        string
 	ServerMaxRetries  string
 	ServerRetryDelay  string
+	ServerAutoRestartIdle       string
+	ServerAutoRestartWindow     string
+	ServerAutoRestartTimezone   string
+	ServerAutoRestartBackoffMax string
 	PortStatus        string // non-empty = port availability status (warning or success)
 	PortTesting       bool   // true while port availability test is running
 

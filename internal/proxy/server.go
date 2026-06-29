@@ -45,6 +45,7 @@ type Server struct {
 	ready        chan struct{} // Closed when server is ready to accept connections
 	actualAddr   string        // Actual bound address (differs from config when port is 0)
 	activeConns  atomic.Int32  // Tracks in-flight HTTP requests
+	lastActivity atomic.Int64  // Unix nanos of last accepted request start
 }
 
 // NewServer creates a new proxy server.
@@ -211,6 +212,9 @@ func (s *Server) Start() error {
 
 	// Store the actual bound address (differs from config when port is 0)
 	s.actualAddr = listener.Addr().String()
+	// Initialize lastActivity to boot time so the idle watcher doesn't see a
+	// zero value (1970) and immediately trip on its first tick.
+	s.lastActivity.Store(time.Now().UnixNano())
 
 	// Launch server in goroutine
 	go func() {
@@ -267,9 +271,16 @@ func (s *Server) ActiveConnections() int32 {
 	return s.activeConns.Load()
 }
 
+// LastActivity returns the time the most recent HTTP request was accepted.
+// Safe to call concurrently with ServeHTTP.
+func (s *Server) LastActivity() time.Time {
+	return time.Unix(0, s.lastActivity.Load())
+}
+
 // ServeHTTP wraps the handler with connection tracking for the grace period logic.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.activeConns.Add(1)
+	s.lastActivity.Store(time.Now().UnixNano())
 	defer s.activeConns.Add(-1)
 	s.handler.ServeHTTP(w, r)
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // GlobalConfigPath returns the global config file path.
@@ -46,6 +47,8 @@ func Load(path string) (*Config, error) {
 		cfg.Profiles = nil // Clear old location - won't be saved
 	}
 
+	validateAutoRestart(&cfg.Server)
+
 	return cfg, nil
 }
 
@@ -70,7 +73,34 @@ func LoadRaw(path string) (*Config, error) {
 		cfg.Profiles = nil // Clear old location - won't be saved
 	}
 
+	validateAutoRestart(&cfg.Server)
+
 	return cfg, nil
+}
+
+// validateAutoRestart emits non-fatal stderr warnings for malformed auto-restart
+// fields. Bad values degrade the feature to disabled but do not abort loading.
+func validateAutoRestart(sc *ServerConfig) {
+	if sc.AutoRestartIdle != "" {
+		if _, err := time.ParseDuration(sc.AutoRestartIdle); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: server.autoRestartIdle %q is not a valid duration; auto-restart disabled\n", sc.AutoRestartIdle)
+		}
+	}
+	if sc.AutoRestartBackoffMax != "" {
+		if _, err := time.ParseDuration(sc.AutoRestartBackoffMax); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: server.autoRestartBackoffMax %q is not a valid duration; backoff disabled\n", sc.AutoRestartBackoffMax)
+		}
+	}
+	if sc.AutoRestartWindow != "" {
+		if _, _, ok := sc.GetAutoRestartWindow(); !ok {
+			fmt.Fprintf(os.Stderr, "Warning: server.autoRestartWindow %q is not in HH:MM-HH:MM format; window ignored\n", sc.AutoRestartWindow)
+		}
+	}
+	if sc.AutoRestartTimezone != "" {
+		if _, err := time.LoadLocation(sc.AutoRestartTimezone); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: server.autoRestartTimezone %q is not a known IANA timezone; using server local time\n", sc.AutoRestartTimezone)
+		}
+	}
 }
 
 // LoadWithOverride loads project config if exists, otherwise global.
