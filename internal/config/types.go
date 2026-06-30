@@ -72,6 +72,10 @@ type ProfileConfig struct {
 type ServerConfig struct {
 	Port int    `json:"port"`
 	Host string `json:"host"`
+	// TLS enables HTTPS on the standalone server. When set, the server accepts
+	// HTTPS on Host:Port. Nil/empty = plaintext HTTP (the default, suitable for
+	// local use and reverse-proxy deployments).
+	TLS *TLSConfig `json:"tls,omitempty"`
 	// AutoRestartIdle enables self-restart after the server is idle (no requests
 	// and zero in-flight connections) for the given duration. Empty = disabled.
 	AutoRestartIdle string `json:"autoRestartIdle,omitempty"`
@@ -87,6 +91,45 @@ type ServerConfig struct {
 	// UserAgent overrides the User-Agent header sent to providers. Empty = use the
 	// default that mimics the @anthropic-ai/sdk User-Agent Claude Code sends.
 	UserAgent string `json:"userAgent,omitempty"`
+}
+
+// TLSConfig configures HTTPS on the standalone server. Two modes, mutually
+// exclusive: manual cert files (CertFile + KeyFile) or automatic Let's Encrypt
+// certificates (Domain). Redirect listens on :80 and 301-redirects HTTP→HTTPS;
+// in autocert mode it also serves the ACME http-01 challenge.
+type TLSConfig struct {
+	// CertFile is the path to a PEM-encoded certificate (manual cert mode).
+	// Required together with KeyFile. Mutually exclusive with Domain.
+	CertFile string `json:"certFile,omitempty"`
+	// KeyFile is the path to the certificate's private key (manual cert mode).
+	KeyFile string `json:"keyFile,omitempty"`
+	// Domain enables autocert (Let's Encrypt) for the given FQDN. The domain
+	// must point at this server and port 80 must be reachable from the internet.
+	// Mutually exclusive with CertFile/KeyFile.
+	Domain string `json:"domain,omitempty"`
+	// Redirect listens on :80 and redirects plain HTTP requests to HTTPS. In
+	// autocert mode this is forced on (the ACME http-01 challenge needs :80).
+	Redirect bool `json:"redirect,omitempty"`
+}
+
+// Mode returns the TLS mode implied by this config: "manual", "autocert", or
+// "" (disabled). Returns "manual" only when both CertFile and KeyFile are set.
+func (t *TLSConfig) Mode() string {
+	if t == nil {
+		return ""
+	}
+	if t.Domain != "" {
+		return "autocert"
+	}
+	if t.CertFile != "" && t.KeyFile != "" {
+		return "manual"
+	}
+	return ""
+}
+
+// Enabled reports whether any TLS mode is configured.
+func (t *TLSConfig) Enabled() bool {
+	return t.Mode() != ""
 }
 
 // GetAutoRestartIdle parses AutoRestartIdle as a duration. Returns 0 (disabled)

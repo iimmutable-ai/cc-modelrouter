@@ -674,6 +674,30 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 		} else {
 			m.state.Config.Server.AutoRestartBackoffMax = ""
 		}
+		// TLS sync (mirrors handleServerSave). cert+key together; exclusive with domain.
+		tlsCert := strings.TrimSpace(m.state.ServerTLSCert)
+		tlsKey := strings.TrimSpace(m.state.ServerTLSKey)
+		tlsDomain := strings.TrimSpace(m.state.ServerTLSDomain)
+		if tlsCert != "" && tlsDomain != "" {
+			// Mutual exclusion violation — skip TLS entirely.
+		} else if (tlsCert != "") != (tlsKey != "") {
+			// Mismatched cert/key — skip TLS entirely.
+		} else if tlsCert == "" && tlsKey == "" && tlsDomain == "" && !m.state.ServerTLSRedirect {
+			m.state.Config.Server.TLS = nil
+			m.state.HasChanges = true
+		} else {
+			tlsCfg := &config.TLSConfig{
+				CertFile: tlsCert,
+				KeyFile:  tlsKey,
+				Domain:   tlsDomain,
+				Redirect: m.state.ServerTLSRedirect,
+			}
+			if tlsCfg.Mode() == "autocert" {
+				tlsCfg.Redirect = true
+			}
+			m.state.Config.Server.TLS = tlsCfg
+			m.state.HasChanges = true
+		}
 		m.state.PortStatus = ""
 		m.state.ProviderCursor = m.state.MainMenuCursor
 		m.state.CurrentScreen = ScreenMainMenu
@@ -1230,6 +1254,17 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 			m.state.ServerAutoRestartTimezone = "Asia/Macau"
 		}
 		m.state.ServerAutoRestartBackoffMax = m.state.Config.Server.AutoRestartBackoffMax
+		if tls := m.state.Config.Server.TLS; tls != nil {
+			m.state.ServerTLSCert = tls.CertFile
+			m.state.ServerTLSKey = tls.KeyFile
+			m.state.ServerTLSDomain = tls.Domain
+			m.state.ServerTLSRedirect = tls.Redirect
+		} else {
+			m.state.ServerTLSCert = ""
+			m.state.ServerTLSKey = ""
+			m.state.ServerTLSDomain = ""
+			m.state.ServerTLSRedirect = false
+		}
 		m.state.PortStatus = ""
 		m.state.CurrentScreen = ScreenServer
 		return m, m.checkPortAvailability()
@@ -1662,6 +1697,31 @@ func (m *WizardModel) handleServerSave() (tea.Model, tea.Cmd) {
 		m.state.Config.Server.AutoRestartBackoffMax = ""
 	}
 
+	// Save TLS settings. cert+key come together; domain is mutually exclusive.
+	cert := strings.TrimSpace(m.state.ServerTLSCert)
+	key := strings.TrimSpace(m.state.ServerTLSKey)
+	domain := strings.TrimSpace(m.state.ServerTLSDomain)
+	if cert != "" && domain != "" {
+		m.state.ErrorMessage = "TLS: cert+key and domain are mutually exclusive; TLS not saved"
+	} else if (cert != "") != (key != "") {
+		m.state.ErrorMessage = "TLS: cert and key must be specified together; TLS not saved"
+	} else if cert == "" && key == "" && domain == "" && !m.state.ServerTLSRedirect {
+		// Nothing specified → TLS fully cleared.
+		m.state.Config.Server.TLS = nil
+	} else {
+		tlsCfg := &config.TLSConfig{
+			CertFile: cert,
+			KeyFile:  key,
+			Domain:   domain,
+			Redirect: m.state.ServerTLSRedirect,
+		}
+		// autocert forces Redirect on (ACME http-01 challenge needs :80).
+		if tlsCfg.Mode() == "autocert" {
+			tlsCfg.Redirect = true
+		}
+		m.state.Config.Server.TLS = tlsCfg
+	}
+
 	m.state.HasChanges = true
 	m.state.CurrentScreen = ScreenMainMenu
 	m.state.ErrorMessage = ""
@@ -2015,6 +2075,34 @@ func (m *WizardModel) handleServerInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if len(msg.String()) == 1 {
 			m.state.ServerAutoRestartTimezone += msg.String()
 		}
+	case 8: // TLSCert (manual cert mode)
+		if msg.String() == "backspace" && len(m.state.ServerTLSCert) > 0 {
+			m.state.ServerTLSCert = m.state.ServerTLSCert[:len(m.state.ServerTLSCert)-1]
+		} else if msg.Paste {
+			m.state.ServerTLSCert += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerTLSCert += msg.String()
+		}
+	case 9: // TLSKey (manual cert mode)
+		if msg.String() == "backspace" && len(m.state.ServerTLSKey) > 0 {
+			m.state.ServerTLSKey = m.state.ServerTLSKey[:len(m.state.ServerTLSKey)-1]
+		} else if msg.Paste {
+			m.state.ServerTLSKey += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerTLSKey += msg.String()
+		}
+	case 10: // TLSDomain (autocert mode)
+		if msg.String() == "backspace" && len(m.state.ServerTLSDomain) > 0 {
+			m.state.ServerTLSDomain = m.state.ServerTLSDomain[:len(m.state.ServerTLSDomain)-1]
+		} else if msg.Paste {
+			m.state.ServerTLSDomain += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerTLSDomain += msg.String()
+		}
+	case 11: // TLSRedirect toggle
+		if msg.String() == " " {
+			m.state.ServerTLSRedirect = !m.state.ServerTLSRedirect
+		}
 	}
 	return m, nil
 }
@@ -2094,7 +2182,7 @@ func (m *WizardModel) getMaxFields() int {
 	case ScreenAddProvider2:
 		return 1
 	case ScreenServer:
-		return 8
+		return 12 // Host, Port, Retries, Delay, Idle, Backoff, Window, TZ, TLSCert, TLSKey, TLSDomain, TLSRedirect
 	case ScreenLogging:
 		return 4
 	case ScreenEditRoute:
@@ -4066,6 +4154,16 @@ func (m *WizardModel) renderServer() string {
 		"Timezone:", m.state.ServerAutoRestartTimezone, m.focusedField == 7,
 	)
 
+	tlsCertKeyLabels, tlsCertKeyInputs := renderTwoColumnRow(
+		"TLS Cert (path):", m.state.ServerTLSCert, m.focusedField == 8,
+		"TLS Key (path):", m.state.ServerTLSKey, m.focusedField == 9,
+	)
+
+	tlsDomRedirectLabels, tlsDomRedirectInputs := renderTwoColumnRow(
+		"TLS Domain (autocert):", m.state.ServerTLSDomain, m.focusedField == 10,
+		"TLS Redirect :80→443:", strconv.FormatBool(m.state.ServerTLSRedirect), m.focusedField == 11,
+	)
+
 	note := MenuItemDimmedStyle.Render("Note: Port 1024-65535 · empty = off/default")
 	if m.state.PortTesting {
 		note = lipgloss.JoinHorizontal(lipgloss.Left, note, "  ", StatusPendingStyle.Render("Testing port..."))
@@ -4095,9 +4193,15 @@ func (m *WizardModel) renderServer() string {
 		windowTzLabels,
 		m.fullWidth(windowTzInputs),
 		m.blankLine(),
+		tlsCertKeyLabels,
+		m.fullWidth(tlsCertKeyInputs),
+		m.blankLine(),
+		tlsDomRedirectLabels,
+		m.fullWidth(tlsDomRedirectInputs),
+		m.blankLine(),
 		note,
 		m.blankLine(),
-		m.footline("[Esc/Enter] Apply & Back   [Tab] Next field"),
+		m.footline("[Esc/Enter] Apply & Back   [Tab] Next field   [Space] Toggle"),
 	)
 
 	if m.state.ErrorMessage != "" {

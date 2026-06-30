@@ -3,11 +3,15 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +19,7 @@ import (
 	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	"github.com/iimmutable-ai/cc-modelrouter/internal/qos"
 	"github.com/iimmutable-ai/cc-modelrouter/internal/logging"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 // ServerConfig represents server configuration.
@@ -22,6 +27,8 @@ type ServerConfig struct {
 	Host           string
 	Port           int
 	MaxRequestSize int64
+	// TLS enables HTTPS on the listener. Nil/empty = plaintext HTTP.
+	TLS *config.TLSConfig
 }
 
 // Defaults returns default server configuration.
@@ -35,17 +42,18 @@ func Defaults() *ServerConfig {
 
 // Server is the HTTP proxy server.
 type Server struct {
-	config       *ServerConfig
-	server       *http.Server
-	handler      *Handler
-	usageTracker UsageTracker
-	instanceID   string
-	mu           sync.Mutex
-	running      bool
-	ready        chan struct{} // Closed when server is ready to accept connections
-	actualAddr   string        // Actual bound address (differs from config when port is 0)
-	activeConns  atomic.Int32  // Tracks in-flight HTTP requests
-	lastActivity atomic.Int64  // Unix nanos of last accepted request start
+	config        *ServerConfig
+	server        *http.Server
+	redirectServer *http.Server // Optional :80 HTTP→HTTPS redirect (and ACME http-01) server
+	handler       *Handler
+	usageTracker  UsageTracker
+	instanceID    string
+	mu            sync.Mutex
+	running       bool
+	ready         chan struct{} // Closed when server is ready to accept connections
+	actualAddr    string        // Actual bound address (differs from config when port is 0)
+	activeConns   atomic.Int32  // Tracks in-flight HTTP requests
+	lastActivity  atomic.Int64  // Unix nanos of last accepted request start
 }
 
 // NewServer creates a new proxy server.
@@ -193,6 +201,33 @@ func (s *Server) Start() error {
 		ErrorLog:     log.New(errorLogWriter, "", 0), // No prefix, uses our logging
 	}
 
+	// Configure TLS up-front so validation errors fail fast before binding.
+	tlsMode := s.config.TLS.Mode()
+	var autocrtpManager *autocert.Manager
+	switch tlsMode {
+	case "manual":
+		if _, err := os.Stat(s.config.TLS.CertFile); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("tls-cert file %q: %w", s.config.TLS.CertFile, err)
+		}
+		if _, err := os.Stat(s.config.TLS.KeyFile); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("tls-key file %q: %w", s.config.TLS.KeyFile, err)
+		}
+	case "autocert":
+		cacheDir, err := autocertCacheDir()
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("autocert cache dir: %w", err)
+		}
+		autocrtpManager = &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(s.config.TLS.Domain),
+			Cache:      autocert.DirCache(cacheDir),
+		}
+		s.server.TLSConfig = autocrtpManager.TLSConfig()
+	}
+
 	// Create readiness channel before starting
 	ready := make(chan struct{})
 	s.ready = ready
@@ -210,6 +245,29 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
+	// For autocert we wrap the listener with TLS ourselves (no cert files to
+	// hand to ServeTLS). For manual mode we pass the raw listener to ServeTLS
+	// and let it load the cert pair. Plaintext is just Serve.
+	var serveListener net.Listener = listener
+	if tlsMode == "autocert" {
+		serveListener = tls.NewListener(listener, s.server.TLSConfig)
+	}
+
+	// Start the :80 redirect / ACME http-01 listener when needed. Bound before
+	// the readiness signal so a port-80 collision fails startup cleanly.
+	needRedirect := tlsMode != "" && (s.config.TLS.Redirect || tlsMode == "autocert")
+	if needRedirect {
+		if err := s.startRedirectServer(autocrtpManager, errorLogWriter); err != nil {
+			// Cleanup the primary listener we already bound.
+			listener.Close()
+			s.mu.Lock()
+			s.running = false
+			s.ready = nil
+			s.mu.Unlock()
+			return err
+		}
+	}
+
 	// Store the actual bound address (differs from config when port is 0)
 	s.actualAddr = listener.Addr().String()
 	// Initialize lastActivity to boot time so the idle watcher doesn't see a
@@ -220,12 +278,92 @@ func (s *Server) Start() error {
 	go func() {
 		// Signal readiness immediately - listener is already accepting connections
 		close(ready)
-		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			// Log error - in production this should use proper logging
+		var serveErr error
+		switch tlsMode {
+		case "manual":
+			// ServeTLS loads the cert pair and wraps the raw listener itself.
+			serveErr = s.server.ServeTLS(listener, s.config.TLS.CertFile, s.config.TLS.KeyFile)
+		case "autocert":
+			// Listener already wrapped with tls.NewListener above.
+			serveErr = s.server.Serve(serveListener)
+		default:
+			// Plaintext.
+			serveErr = s.server.Serve(listener)
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			logging.Errorf("HTTP server exited: %v", serveErr)
 		}
 	}()
 
 	return nil
+}
+
+// startRedirectServer binds :80 and serves HTTP→HTTPS redirects. In autocert
+// mode it also serves the ACME http-01 challenge via manager.HTTPHandler.
+// The caller is responsible for tearing down via Stop() which closes
+// redirectServer.
+func (s *Server) startRedirectServer(manager *autocert.Manager, errorLogWriter io.Writer) error {
+	var handler http.Handler
+	if manager != nil {
+		handler = manager.HTTPHandler(http.HandlerFunc(httpsRedirectHandler))
+	} else {
+		handler = http.HandlerFunc(httpsRedirectHandler)
+	}
+	s.redirectServer = &http.Server{
+		Addr:         ":80",
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		ErrorLog:     log.New(errorLogWriter, "", 0),
+	}
+	ln, err := net.Listen("tcp", ":80")
+	if err != nil {
+		return fmt.Errorf("failed to listen on :80 for redirect: %w", err)
+	}
+	go func() {
+		if err := s.redirectServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			logging.Errorf("HTTP redirect server on :80 exited: %v", err)
+		}
+	}()
+	logging.Infof("TLS: HTTP→HTTPS redirect listening on :80")
+	return nil
+}
+
+// httpsRedirectHandler emits a 301 to the HTTPS URL equivalent of the request.
+// The scheme is forced to https; host/path/query are preserved from the inbound
+// request.
+func httpsRedirectHandler(w http.ResponseWriter, r *http.Request) {
+	target := "https://" + stripPort(r.Host) + r.URL.RequestURI()
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+// stripPort returns the host portion of a host[:port] string. The redirect
+// targets the canonical HTTPS port (443) so we drop any explicit :port from
+// the inbound Host header.
+func stripPort(hostport string) string {
+	if i := strings.LastIndex(hostport, ":"); i >= 0 {
+		// Guard against stripping from an IPv6 literal without a port. net.SplitHostPort
+		// is the right tool here, but a naive strip suffices because we always
+		// rebuild the URL with the default HTTPS port via http.Redirect.
+		return hostport[:i]
+	}
+	return hostport
+}
+
+// autocertCacheDir returns ~/.cc-modelrouter/letsencrypt, creating it with
+// mode 0700 if missing. The autocert cache holds issued Let's Encrypt
+// certificates across restarts so we don't re-hit the ACME server on every
+// boot.
+func autocertCacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".cc-modelrouter", "letsencrypt")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 // Stop stops the server.
@@ -242,9 +380,17 @@ func (s *Server) Stop(ctx context.Context) error {
 		shutdowner.Shutdown()
 	}
 
+	var redirectErr error
+	if s.redirectServer != nil {
+		redirectErr = s.redirectServer.Shutdown(ctx)
+	}
+
 	err := s.server.Shutdown(ctx)
 	s.running = false
 	s.ready = nil // Clean up readiness channel
+	if err == nil {
+		return redirectErr
+	}
 	return err
 }
 

@@ -124,6 +124,10 @@ ccrouter start [flags]
       --auto-restart-window string   Restrict restart to time window HH:MM-HH:MM (tz from --auto-restart-timezone)
       --auto-restart-timezone string IANA timezone for --auto-restart-window (e.g. Asia/Shanghai); empty = Local
       --auto-restart-backoff-max duration  Random backoff cap before restart (e.g. 10m); empty = none
+      --tls-cert string              Path to TLS cert file (enables HTTPS, manual cert mode)
+      --tls-key string               Path to TLS private key file (requires --tls-cert)
+      --tls-domain string            FQDN for automatic Let's Encrypt cert (enables HTTPS, autocert mode)
+      --tls-redirect                 Listen on :80 and redirect HTTP to HTTPS (forced on with --tls-domain)
 ```
 
 **Description:**
@@ -131,6 +135,7 @@ ccrouter start [flags]
 - Saves instance metadata for management
 - Does NOT launch Claude Code
 - Optional auto-restart policy: when `--auto-restart-idle` is set, the server restarts itself in-place via `syscall.Exec` after the configured idle period (see [Configuration - Auto-Restart](configuration.md#auto-restart))
+- Optional HTTPS: pass `--tls-cert`+`--tls-key` (manual cert) or `--tls-domain` (Let's Encrypt autocert) to serve HTTPS instead of HTTP. `--tls-redirect` opens :80 and 301-redirects to HTTPS (forced on with `--tls-domain`). See [Public Deployment with HTTPS](deployment.md) for an end-to-end walk-through.
 
 **Examples:**
 ```bash
@@ -152,6 +157,15 @@ ccrouter start \
   --auto-restart-window=03:00-05:00 \
   --auto-restart-timezone=Asia/Shanghai \
   --auto-restart-backoff-max=10m
+
+# Public server with HTTPS via Let's Encrypt (domain must point at this host)
+ccrouter start -H 0.0.0.0 --port 443 --tls-domain=api.example.com
+
+# Public server with HTTPS via your own cert files
+ccrouter start -H 0.0.0.0 --port 443 \
+  --tls-cert=/etc/letsencrypt/live/api.example.com/fullchain.pem \
+  --tls-key=/etc/letsencrypt/live/api.example.com/privkey.pem \
+  --tls-redirect
 ```
 
 ---

@@ -66,6 +66,12 @@ Project configuration **completely overrides** global configuration when present
   "server": {
     "port": 8081,
     "host": "localhost",
+    "tls": {
+      "certFile": "",
+      "keyFile": "",
+      "domain": "",
+      "redirect": false
+    },
     "autoRestartIdle": "30m",
     "autoRestartWindow": "03:00-05:00",
     "autoRestartTimezone": "Asia/Shanghai",
@@ -79,11 +85,32 @@ Project configuration **completely overrides** global configuration when present
 |-------|------|---------|-------------|
 | `port` | int | 8081 | Port to listen on |
 | `host` | string | localhost | Host to bind to |
+| `tls` | object | `null` (HTTP) | HTTPS configuration. When set, the server accepts HTTPS on `host:port`. CLI flags `--tls-cert`/`--tls-key`/`--tls-domain`/`--tls-redirect` override these fields. See [Public Deployment with HTTPS](deployment.md). |
+| `tls.certFile` | string | `""` | Path to a PEM-encoded certificate (manual cert mode). Required together with `tls.keyFile`; mutually exclusive with `tls.domain`. |
+| `tls.keyFile` | string | `""` | Path to the certificate's private key (manual cert mode). |
+| `tls.domain` | string | `""` | FQDN for automatic Let's Encrypt certificate via autocert. The domain must resolve to this server and port 80 must be reachable from the internet (ACME http-01 challenge). Mutually exclusive with `certFile`/`keyFile`. Cert cache: `~/.cc-modelrouter/letsencrypt/`. |
+| `tls.redirect` | bool | `false` | Listen on `:80` and 301-redirect HTTP traffic to HTTPS. Forced on when `tls.domain` is set (the ACME challenge requires `:80`). |
 | `autoRestartIdle` | duration string | `""` (disabled) | Self-restart after the server is idle (no requests, zero in-flight connections) for this long. Examples: `30m`, `2h`. Empty disables auto-restart. |
 | `autoRestartWindow` | `HH:MM-HH:MM` | `""` (always) | Restrict restart eligibility to a time-of-day window (24h, strict 2-digit hour and minute). Supports overnight wrap (e.g. `23:00-04:00`). Interpreted in `autoRestartTimezone`. Empty = always eligible. |
 | `autoRestartTimezone` | IANA name | `""` (Local) | Timezone used to evaluate `autoRestartWindow` (e.g. `Asia/Shanghai`, `UTC`). Empty = server local time. |
 | `autoRestartBackoffMax` | duration string | `""` (none) | Cap on a random jitter delay applied after idle fires and before the restart, to desynchronize multiple instances. Empty/`0` = no backoff. |
 | `userAgent` | string | `""` (Claude Code SDK UA) | Overrides the `User-Agent` header sent to providers. Empty = the default that mimics the `@anthropic-ai/sdk` User-Agent Claude Code sends (`@anthropic-ai/sdk/0.30.0 bun/1.3.13 darwin/arm64`). |
+
+### TLS / HTTPS
+
+The standalone server can serve HTTPS directly — useful when deploying to a public-facing host (e.g. Alibaba Cloud SAS in Korea/HK/Singapore) where you want Claude Code on a laptop to point `ANTHROPIC_BASE_URL` at an HTTPS endpoint you control, without standing up a separate reverse proxy.
+
+Two mutually-exclusive modes:
+
+- **Manual cert files** — set `tls.certFile` and `tls.keyFile` to PEM files you manage (e.g. from `certbot` or your own CA). You handle renewal.
+- **Let's Encrypt autocert** — set `tls.domain` to an FQDN that resolves to this server. Certificates are issued and renewed automatically via the ACME http-01 challenge (requires `:80` reachable from the internet). Certificates are cached at `~/.cc-modelrouter/letsencrypt/`.
+
+Equivalent CLI flags (`--tls-cert`, `--tls-key`, `--tls-domain`, `--tls-redirect`) override these fields for a single invocation — handy for one-shot starts where you don't want to edit the config file. See [Public Deployment with HTTPS](deployment.md) for an end-to-end walk-through.
+
+**Privileged ports:** if you bind `--port 443` (or any port < 1024) the process needs the `CAP_NET_BIND_SERVICE` capability or to be run as root:
+```bash
+sudo setcap CAP_NET_BIND_SERVICE=+eip $(which ccrouter)
+```
 
 ### Auto-Restart
 

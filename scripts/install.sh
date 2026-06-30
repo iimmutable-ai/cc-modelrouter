@@ -6,9 +6,25 @@
 #   curl -fsSL https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh | bash
 #   bash install.sh --version vX.Y.Z -d /custom/path
 #
+# On Alibaba Cloud / constrained networks where direct github.com fetches are
+# truncated or reset, prefix all GitHub URLs with a mirror:
+#   GITHUB_MIRROR=https://ghproxy.com bash install.sh
+#   (outer curl must also use the mirror — see docs/troubleshooting.md)
+#
 # The first `ccrouter config` run auto-fetches provider presets from GitHub.
 
 set -euo pipefail
+
+# GITHUB_MIRROR, when set, prefixes https://github.com and https://api.github.com
+# URLs so the install works on networks where direct GitHub access is blocked
+# or truncated (e.g. Alibaba Cloud). Example: GITHUB_MIRROR=https://ghproxy.com
+github_url() {
+    if [[ -n "${GITHUB_MIRROR:-}" ]]; then
+        printf '%s/%s' "${GITHUB_MIRROR%/}" "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
 
 REPO_OWNER="iimmutable-ai"
 REPO_NAME="cc-modelrouter"
@@ -84,7 +100,7 @@ USE_SUDO="${USE_SUDO:-0}"
 
 # Fetch latest release version if not specified
 if [[ -z "$VERSION" ]]; then
-    API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+    API_URL="$(github_url "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest")"
     VERSION=$(curl -fsSL "$API_URL" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
     if [[ -z "$VERSION" ]]; then
         echo "Failed to fetch latest release version"
@@ -96,8 +112,8 @@ echo "Installing ${BINARY_NAME} ${VERSION} for ${OS}/${ARCH} to ${BINDIR}"
 
 # Download archive and checksums
 ARCHIVE_NAME="${BINARY_NAME}_${VERSION#v}_${OS}_${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/${ARCHIVE_NAME}"
-CHECKSUMS_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/checksums.txt"
+DOWNLOAD_URL="$(github_url "https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/${ARCHIVE_NAME}")"
+CHECKSUMS_URL="$(github_url "https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/checksums.txt")"
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT

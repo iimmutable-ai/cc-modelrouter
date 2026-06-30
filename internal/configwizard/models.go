@@ -86,6 +86,10 @@ type WizardState struct {
 	ServerAutoRestartWindow     string
 	ServerAutoRestartTimezone   string
 	ServerAutoRestartBackoffMax string
+	ServerTLSCert     string // path to TLS cert file (manual cert mode)
+	ServerTLSKey      string // path to TLS private key (manual cert mode)
+	ServerTLSDomain   string // FQDN for Let's Encrypt autocert
+	ServerTLSRedirect bool   // listen on :80, redirect HTTP→HTTPS
 	PortStatus        string // non-empty = port availability status (warning or success)
 	PortTesting       bool   // true while port availability test is running
 

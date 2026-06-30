@@ -84,6 +84,10 @@ Flags:
 	cmd.Flags().String("auto-restart-window", "", "Restrict restart to time window HH:MM-HH:MM (tz from --auto-restart-timezone)")
 	cmd.Flags().String("auto-restart-timezone", "", "IANA timezone for --auto-restart-window (e.g. Asia/Shanghai); empty = Local")
 	cmd.Flags().String("auto-restart-backoff-max", "", "Random backoff cap before restart (e.g. 10m); empty = none")
+	cmd.Flags().String("tls-cert", "", "Path to TLS cert file (enables HTTPS, manual cert mode)")
+	cmd.Flags().String("tls-key", "", "Path to TLS private key file (requires --tls-cert)")
+	cmd.Flags().String("tls-domain", "", "FQDN for automatic Let's Encrypt cert (enables HTTPS, autocert mode)")
+	cmd.Flags().Bool("tls-redirect", false, "Listen on :80 and redirect HTTP to HTTPS (forced on with --tls-domain)")
 
 	return cmd
 }
@@ -99,6 +103,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 	autoRestartWindow, _ := cmd.Flags().GetString("auto-restart-window")
 	autoRestartTimezone, _ := cmd.Flags().GetString("auto-restart-timezone")
 	autoRestartBackoffMax, _ := cmd.Flags().GetString("auto-restart-backoff-max")
+	tlsCert, _ := cmd.Flags().GetString("tls-cert")
+	tlsKey, _ := cmd.Flags().GetString("tls-key")
+	tlsDomain, _ := cmd.Flags().GetString("tls-domain")
+	tlsRedirect, _ := cmd.Flags().GetBool("tls-redirect")
 
 	// Get working directory
 	projectRoot, err := os.Getwd()
@@ -192,6 +200,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 		cfg.Server.AutoRestartBackoffMax = autoRestartBackoffMax
 	}
 
+	// Apply TLS overrides (manual cert files OR Let's Encrypt autocert).
+	// CLI flags win over config-file `server.tls.*`. Validated up-front so
+	// bad combinations (cert without key, mutually-exclusive modes, missing
+	// files) fail fast before binding any port.
+	if err := applyTLSOverrides(cmd, cfg, tlsCert, tlsKey, tlsDomain, tlsRedirect); err != nil {
+		return err
+	}
+
 	// Generate instance ID and address early (needed for logging)
 	instanceID := daemon.GenerateInstanceID()
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -252,8 +268,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Create server
 	serverCfg := &proxy.ServerConfig{
-		Host: cfg.Server.Host,
-		Port: cfg.Server.Port,
+		Host:           cfg.Server.Host,
+		Port:           cfg.Server.Port,
+		MaxRequestSize: 50 * 1024 * 1024, // 50MB — matches proxy.Defaults
+		TLS:            cfg.Server.TLS,
 	}
 	server, err := proxy.NewServer(serverCfg)
 	if err != nil {
@@ -470,7 +488,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Router started with instance ID: %s\n", instanceID)
 	fmt.Printf("Set these environment variables to use the router:\n")
-	fmt.Printf("  export ANTHROPIC_BASE_URL=http://%s\n", actualAddr)
+	scheme := "http"
+	displayHost := actualAddr
+	if cfg.Server.TLS.Enabled() {
+		scheme = "https"
+		// In autocert mode the canonical client-facing hostname is the domain,
+		// not the bind address (which may be 0.0.0.0). Prefer the domain in the
+		// printed URL so users get a URL that actually resolves.
+		if cfg.Server.TLS.Domain != "" {
+			if _, portStr, splitErr := net.SplitHostPort(actualAddr); splitErr == nil {
+				displayHost = net.JoinHostPort(cfg.Server.TLS.Domain, portStr)
+			}
+		}
+	}
+	fmt.Printf("  export ANTHROPIC_BASE_URL=%s://%s\n", scheme, displayHost)
 	if settings.Enabled {
 		fmt.Printf("  export ANTHROPIC_API_KEY=<your-sk-ccr-key>\n")
 	}
@@ -681,4 +712,81 @@ func performIdleRestart(server *proxy.Server, instanceID string, opts idleWatchO
 		logging.Errorf("Auto-restart: syscall.Exec failed: %v — exiting", err)
 		os.Exit(1)
 	}
+}
+
+// applyTLSOverrides merges CLI TLS flags into cfg.Server.TLS, with CLI flags
+// winning over config-file values. Validates mutual-exclusion and file
+// existence up front so bad combos fail fast. Idempotent: if no CLI TLS flags
+// are set and config has no TLS block, this is a no-op.
+func applyTLSOverrides(cmd *cobra.Command, cfg *config.Config, tlsCert, tlsKey, tlsDomain string, tlsRedirect bool) error {
+	anyTLSFlagSet := cmd.Flags().Changed("tls-cert") ||
+		cmd.Flags().Changed("tls-key") ||
+		cmd.Flags().Changed("tls-domain") ||
+		cmd.Flags().Changed("tls-redirect")
+
+	// Mutually exclusive: cert + domain.
+	if tlsCert != "" && tlsDomain != "" {
+		return fmt.Errorf("--tls-cert and --tls-domain are mutually exclusive (pick manual certs or autocert)")
+	}
+	// Cert and key must come together.
+	if (tlsCert != "") != (tlsKey != "") {
+		return fmt.Errorf("--tls-cert and --tls-key must be specified together")
+	}
+
+	// If any CLI TLS flag is set, build a fresh TLSConfig from the flags (CLI
+	// wins over config). Otherwise, fall through to whatever the config file
+	// already provided.
+	var tlsCfg *config.TLSConfig
+	if anyTLSFlagSet {
+		tlsCfg = &config.TLSConfig{
+			CertFile: tlsCert,
+			KeyFile:  tlsKey,
+			Domain:   tlsDomain,
+			Redirect: tlsRedirect,
+		}
+	} else if cfg.Server.TLS != nil {
+		tlsCfg = cfg.Server.TLS
+	} else {
+		return nil // No TLS anywhere — plaintext.
+	}
+
+	// Validate the resolved config.
+	switch tlsCfg.Mode() {
+	case "manual":
+		if _, err := os.Stat(tlsCfg.CertFile); err != nil {
+			return fmt.Errorf("--tls-cert file %q: %w", tlsCfg.CertFile, err)
+		}
+		if _, err := os.Stat(tlsCfg.KeyFile); err != nil {
+			return fmt.Errorf("--tls-key file %q: %w", tlsCfg.KeyFile, err)
+		}
+	case "autocert":
+		// autocert forces Redirect on (ACME http-01 challenge needs :80).
+		tlsCfg.Redirect = true
+	case "":
+		// Redirect with no cert source is a no-op — warn and ignore.
+		if tlsCfg.Redirect {
+			fmt.Fprintln(os.Stderr, "Warning: --tls-redirect set without --tls-cert or --tls-domain; ignoring")
+			tlsCfg.Redirect = false
+		}
+	}
+
+	cfg.Server.TLS = tlsCfg
+
+	// Warn if TLS is active but the bind address is localhost — clients on
+	// other machines (the whole point of public-server HTTPS) cannot reach it.
+	if tlsCfg.Enabled() && isLocalhost(cfg.Server.Host) {
+		fmt.Fprintf(os.Stderr,
+			"Warning: TLS enabled with host %q; bind a public interface (e.g. -H 0.0.0.0) for off-host clients\n",
+			cfg.Server.Host)
+	}
+	return nil
+}
+
+// isLocalhost reports whether the host string binds to the loopback interface.
+func isLocalhost(host string) bool {
+	switch host {
+	case "", "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }

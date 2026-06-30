@@ -2,6 +2,68 @@
 
 Common issues and their solutions when using ccrouter.
 
+## Installation Fails Behind a GitHub Firewall (Alibaba Cloud, China, etc.)
+
+### Issue: `curl | bash` exits with `curl: (23) Failed writing body`
+
+**Symptoms:**
+- Running the documented install:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh | bash
+  ```
+  fails with:
+  ```
+  curl: (23) Failed writing body (1148 != 1290)
+  ```
+- The byte counts are small and unequal. No install output appears — the script never starts executing.
+
+**Root Cause:**
+The HTTP response body is being truncated mid-transfer somewhere between the host and `raw.githubusercontent.com` (Fastly CDN), so `bash` receives EOF early and closes the pipe. `curl: (23)` is `CURLE_WRITE_ERROR` — bash stopped reading before curl finished writing. The install script itself is fine; the first ~1.5 KB of `install.sh` contains only comments, `set -euo pipefail`, and an arg-parsing loop that never runs under `curl | bash` (zero positional args), so there is no in-script exit in that window.
+
+This is common on **Alibaba Cloud** (any region — Korea included — due to Fastly egress filtering) and inside **mainland China** (GFW). Not a bug in the install script.
+
+**Fix A (preferred, requires Go 1.22+):** install via `go install` through the China module proxy — no GitHub fetches at all:
+
+```bash
+GOPROXY=https://goproxy.cn,direct go install github.com/iimmutable-ai/cc-modelrouter/cmd/ccrouter@latest
+```
+
+Modules are pulled from `goproxy.cn` (Alibaba-hosted, reliable from any Alibaba Cloud region). The binary lands in `$GOPATH/bin` (or `$GOBIN`).
+
+**Fix B (no Go toolchain):** fetch the install script through a mirror, then pass the same mirror into the script via `GITHUB_MIRROR` so its api.github.com and github.com release fetches also go through the mirror:
+
+```bash
+curl -fsSL https://ghproxy.com/https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh \
+  | GITHUB_MIRROR=https://ghproxy.com bash
+```
+
+Both the outer `curl` URL **and** the inner `GITHUB_MIRROR` must point at the mirror — the script needs the mirror for the api.github.com release-tag lookup and the github.com tarball + checksums downloads. Setting only one of them will still fail.
+
+Alternative mirrors if `ghproxy.com` is slow from your region:
+- `https://gh-proxy.com`
+- `https://hk.gitmirror.com` (Hong Kong — typically fastest from Korea)
+- `https://github.moeyy.xyz`
+
+Swap the prefix in both places (the outer curl URL and the `GITHUB_MIRROR=` value) to change mirrors.
+
+### Issue: `ccrouter config` shows no built-in providers
+
+**Symptoms:**
+- After a successful install on a constrained network, running `ccrouter config` launches the wizard but the provider preset list is empty.
+
+**Root Cause:**
+On first run, the wizard fetches `presets/provider-presets.json` from `raw.githubusercontent.com` (`internal/configwizard/presets.go`). Behind a GitHub firewall the fetch fails; the wizard continues with an empty preset map rather than aborting.
+
+**Fix:** pre-create the global presets file through a mirror so the wizard reads it locally:
+
+```bash
+mkdir -p ~/.cc-modelrouter
+curl -fsSL https://ghproxy.com/https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/presets/provider-presets.json \
+  -o ~/.cc-modelrouter/provider-presets.json
+```
+
+Then run `ccrouter config` — the wizard reads the file directly, no network fetch. Alternatively, skip the preset list and add your provider via the custom-provider option in the wizard.
+
 ## Port Conflicts
 
 ### Issue: Router appears to start but requests return unexpected responses
@@ -308,9 +370,12 @@ Then re-run `claude` and confirm the ccrouter monitor now shows inbound traffic.
 
 **Security note:** binding `0.0.0.0` exposes the router to the internet. For any
 non-localhost deployment, rely on API-token authentication (multi-user mode /
-`ANTHROPIC_AUTH_TOKEN`) and restrict access via the cloud security group, or put
-the router behind a reverse proxy with TLS. The loopback default exists
-specifically to keep accidental exposure off by default.
+`ANTHROPIC_AUTH_TOKEN`) and either (a) restrict access via the cloud security
+group, (b) put the router behind a reverse proxy with TLS, or (c) enable
+ccrouter's built-in HTTPS with `--tls-cert`/`--tls-key` (manual certs) or
+`--tls-domain` (Let's Encrypt autocert). See [Public Deployment with HTTPS](deployment.md).
+The loopback default exists specifically to keep accidental exposure off by
+default.
 
 ## Thinking Block and Content Validation Errors (CRITICAL)
 

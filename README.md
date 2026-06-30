@@ -47,6 +47,8 @@ Runs locally on localhost. API keys never leave your machine. Admin API is token
 curl -fsSL https://raw.githubusercontent.com/iimmutable-ai/cc-modelrouter/master/scripts/install.sh | bash
 ```
 
+> **Alibaba Cloud / China users:** the `curl | bash` pipe is truncated by the network path to `raw.githubusercontent.com`. Use `GOPROXY=https://goproxy.cn,direct go install ...` (below), or see [Installation Behind a GitHub Firewall](docs/troubleshooting.md#installation-fails-behind-a-github-firewall-alibaba-cloud-china-etc).
+
 **Alternative (Go users):**
 
 ```bash
@@ -185,6 +187,92 @@ Point any Anthropic-compatible client at the server:
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8081
 ```
+
+### Public Deployment (HTTPS on Alibaba Cloud SAS, etc.)
+
+Run ccrouter as a public-facing HTTPS endpoint — for example on **Alibaba Cloud Simple Application Server** in Korea / Hong Kong / Singapore — so Claude Code on a laptop can point at an HTTPS URL you control. Built-in TLS means no separate reverse proxy.
+
+**Quick start (Let's Encrypt autocert, one-liner):**
+
+```bash
+sudo setcap CAP_NET_BIND_SERVICE=+eip $(which ccrouter)
+ccrouter start -H 0.0.0.0 --port 443 --tls-domain=api.example.com
+```
+
+`--tls-domain` issues and renews the certificate automatically via the ACME http-01 challenge (port 80 must be reachable). `--tls-redirect` is forced on. Cert cache lives at `~/.cc-modelrouter/letsencrypt/`.
+
+**Manual cert files (if you bring your own PEM files, e.g. from certbot):**
+
+```bash
+ccrouter start -H 0.0.0.0 --port 443 \
+  --tls-cert=/etc/letsencrypt/live/api.example.com/fullchain.pem \
+  --tls-key=/etc/letsencrypt/live/api.example.com/privkey.pem \
+  --tls-redirect
+```
+
+**Then point Claude Code (from your laptop):**
+
+```bash
+export ANTHROPIC_BASE_URL=https://api.example.com
+export ANTHROPIC_API_KEY=<your-sk-ccr-key>
+claude
+```
+
+**Alibaba Cloud SAS checklist:**
+1. Buy a SAS instance in the target region (Korea/HK/Singapore for GFW-friendly latency to mainland providers, or vice-versa).
+2. In the SAS security-group panel, open **inbound TCP 443 and 80**. (The SAS panel is separate from the in-VM firewall — both must allow the ports.)
+3. On the VM, open the same ports: `sudo ufw allow 80,443/tcp` (or `firewall-cmd --add-port=80/tcp --permanent && firewall-cmd --add-port=443/tcp --permanent && firewall-cmd --reload`).
+4. Verify on the VM: `sudo ss -tlnp | grep -E ':(443|80)\b'` should show ccrouter bound to `0.0.0.0`.
+5. Point your domain's A record at the VM's public IP. Wait for DNS to propagate, then start ccrouter with `--tls-domain`.
+6. **Always enable multi-user mode + API keys** before exposing publicly (see [Multi-User Mode](#multi-user-mode)). Never put a no-auth ccrouter on the public internet.
+
+See [docs/deployment.md](docs/deployment.md) for the full walk-through, troubleshooting, and the config-file equivalent.
+
+#### Running as a systemd service
+
+For production, run ccrouter under systemd so it starts on boot and restarts on crash.
+
+```bash
+sudo tee /etc/systemd/system/ccrouter.service > /dev/null <<'UNIT'
+[Unit]
+Description=cc-modelrouter standalone server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ccrouter
+Group=ccrouter
+# Allow binding ports 80 and 443 without root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/home/ccrouter/.cc-modelrouter
+# Where ccrouter lives (adjust if installed elsewhere)
+ExecStart=/usr/local/bin/ccrouter start -H 0.0.0.0 --port 443 --tls-domain=api.example.com
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo useradd --system --create-home --home-dir /home/ccrouter --shell /usr/sbin/nologin ccrouter
+sudo chown -R ccrouter:ccrouter /home/ccrouter
+sudo systemctl daemon-reload
+sudo systemctl enable --now ccrouter
+sudo journalctl -u ccrouter -f   # tail logs
+```
+
+**Notes on the unit file:**
+- `User=ccrouter` runs as an unprivileged user; `AmbientCapabilities=CAP_NET_BIND_SERVICE` lets it bind `:80`/`:443` without root. (Equivalent to the `setcap` incantation used in foreground mode, but applied by the supervisor.)
+- `ReadWritePaths` is limited to `~/.cc-modelrouter` (config, instance metadata, logs, Let's Encrypt cache). `ProtectSystem=strict` makes the rest of the filesystem read-only.
+- Use `--tls-cert`/`--tls-key` instead of `--tls-domain` if you manage certs yourself (e.g. via a separate `certbot renew` systemd timer).
+- To keep TLS settings in a config file instead of CLI flags, write them to `~/.cc-modelrouter/config.json` (`server.tls.{domain, certFile, keyFile, redirect}`) and change `ExecStart` to plain `ccrouter start`.
+- `ccrouter start` has its own auto-restart-on-idle feature (`--auto-restart-idle`) — systemd's `Restart=on-failure` is for crash-recovery. The two are independent and complementary.
 
 ### Generating Claude Code Settings
 
@@ -456,6 +544,9 @@ When multi-user mode is enabled, three additional tabs are available:
 - **Auto Permissions** — `ccrouter code` defaults to `--permission-mode auto` for zero-friction launch
 - **Arg Passthrough** — pass any flags to Claude Code via `--` separator
 - **Standalone Server** — run as a persistent server for any Anthropic-compatible client
+- **Auto-Restart** — `ccrouter start --auto-restart-idle=30m` recycles idle daemons during a configurable time window so long-running servers release OS resources without interrupting active traffic ([docs](docs/configuration.md#auto-restart))
+- **Built-in HTTPS** — `ccrouter start --tls-domain=api.example.com` (Let's Encrypt autocert) or `--tls-cert`/`--tls-key` (manual certs) serves HTTPS directly, with optional `--tls-redirect` from `:80`. For deploying to public hosts like Alibaba Cloud SAS in Korea/HK/Singapore without a reverse proxy ([docs](docs/deployment.md))
+- **User-Agent Override** — the router sends the same `User-Agent` Claude Code sends to Anthropic-protocol providers by default; override via `server.userAgent` for provider-specific front-ends ([docs](docs/configuration.md#user-agent))
 - **Settings Generation** — `ccrouter gen settings` generates Claude Code settings with proxy URL and API key pre-configured
 - **Request Compaction** — automatic request reduction for providers with context window limits
 - **Instance Isolation** — each `ccrouter code` gets its own port, PID, and log file
