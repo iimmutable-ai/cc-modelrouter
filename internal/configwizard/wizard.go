@@ -1226,6 +1226,9 @@ func (m *WizardModel) handleMainMenuEnter() (tea.Model, tea.Cmd) {
 		m.state.ServerAutoRestartIdle = m.state.Config.Server.AutoRestartIdle
 		m.state.ServerAutoRestartWindow = m.state.Config.Server.AutoRestartWindow
 		m.state.ServerAutoRestartTimezone = m.state.Config.Server.AutoRestartTimezone
+		if m.state.ServerAutoRestartTimezone == "" {
+			m.state.ServerAutoRestartTimezone = "Asia/Macau"
+		}
 		m.state.ServerAutoRestartBackoffMax = m.state.Config.Server.AutoRestartBackoffMax
 		m.state.PortStatus = ""
 		m.state.CurrentScreen = ScreenServer
@@ -1988,7 +1991,15 @@ func (m *WizardModel) handleServerInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if len(msg.String()) == 1 {
 			m.state.ServerAutoRestartIdle += msg.String()
 		}
-	case 5: // AutoRestartWindow
+	case 5: // AutoRestartBackoffMax
+		if msg.String() == "backspace" && len(m.state.ServerAutoRestartBackoffMax) > 0 {
+			m.state.ServerAutoRestartBackoffMax = m.state.ServerAutoRestartBackoffMax[:len(m.state.ServerAutoRestartBackoffMax)-1]
+		} else if msg.Paste {
+			m.state.ServerAutoRestartBackoffMax += string(msg.Runes)
+		} else if len(msg.String()) == 1 {
+			m.state.ServerAutoRestartBackoffMax += msg.String()
+		}
+	case 6: // AutoRestartWindow
 		if msg.String() == "backspace" && len(m.state.ServerAutoRestartWindow) > 0 {
 			m.state.ServerAutoRestartWindow = m.state.ServerAutoRestartWindow[:len(m.state.ServerAutoRestartWindow)-1]
 		} else if msg.Paste {
@@ -1996,21 +2007,13 @@ func (m *WizardModel) handleServerInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if len(msg.String()) == 1 {
 			m.state.ServerAutoRestartWindow += msg.String()
 		}
-	case 6: // AutoRestartTimezone
+	case 7: // AutoRestartTimezone
 		if msg.String() == "backspace" && len(m.state.ServerAutoRestartTimezone) > 0 {
 			m.state.ServerAutoRestartTimezone = m.state.ServerAutoRestartTimezone[:len(m.state.ServerAutoRestartTimezone)-1]
 		} else if msg.Paste {
 			m.state.ServerAutoRestartTimezone += string(msg.Runes)
 		} else if len(msg.String()) == 1 {
 			m.state.ServerAutoRestartTimezone += msg.String()
-		}
-	case 7: // AutoRestartBackoffMax
-		if msg.String() == "backspace" && len(m.state.ServerAutoRestartBackoffMax) > 0 {
-			m.state.ServerAutoRestartBackoffMax = m.state.ServerAutoRestartBackoffMax[:len(m.state.ServerAutoRestartBackoffMax)-1]
-		} else if msg.Paste {
-			m.state.ServerAutoRestartBackoffMax += string(msg.Runes)
-		} else if len(msg.String()) == 1 {
-			m.state.ServerAutoRestartBackoffMax += msg.String()
 		}
 	}
 	return m, nil
@@ -4023,71 +4026,47 @@ func (m *WizardModel) renderEditRoute() string {
 func (m *WizardModel) renderServer() string {
 	title := SectionHeaderStyle.Width(m.contentWidth()).Render("Proxy Settings")
 
-	hostLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Host:")
-	hostInput := m.state.ServerHost
-	if m.focusedField == 0 {
-		hostInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(hostInput + "_")
-	} else {
-		hostInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(hostInput)
+	colW := m.contentWidth() / 2
+	labelW := colW
+	inputW := colW - InputFieldStyle.GetHorizontalFrameSize()
+
+	renderTwoColumnRow := func(labelA, valueA string, focusA bool, labelB, valueB string, focusB bool) (string, string) {
+		la := MenuItemDimmedStyle.Width(labelW).Render(labelA)
+		lb := MenuItemDimmedStyle.Width(labelW).Render(labelB)
+
+		renderField := func(value string, focused bool) string {
+			if focused {
+				return InputFieldFocusedStyle.Width(inputW).Render(value + "_")
+			}
+			return InputFieldStyle.Width(inputW).Render(value)
+		}
+
+		labelsRow := lipgloss.JoinHorizontal(lipgloss.Left, la, " ", lb)
+		inputsRow := lipgloss.JoinHorizontal(lipgloss.Left, renderField(valueA, focusA), " ", renderField(valueB, focusB))
+		return labelsRow, inputsRow
 	}
 
-	portLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Port:")
-	portInput := m.state.ServerPort
-	if m.focusedField == 1 {
-		portInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(portInput + "_")
-	} else {
-		portInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(portInput)
-	}
+	hostPortLabels, hostPortInputs := renderTwoColumnRow(
+		"Host:", m.state.ServerHost, m.focusedField == 0,
+		"Port:", m.state.ServerPort, m.focusedField == 1,
+	)
 
-	retriesLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Max Retries (failover):")
-	retriesInput := m.state.ServerMaxRetries
-	if m.focusedField == 2 {
-		retriesInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(retriesInput + "_")
-	} else {
-		retriesInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(retriesInput)
-	}
+	retriesDelayLabels, retriesDelayInputs := renderTwoColumnRow(
+		"Max Retries (failover):", m.state.ServerMaxRetries, m.focusedField == 2,
+		"Retry Delay (500ms, 1s):", m.state.ServerRetryDelay, m.focusedField == 3,
+	)
 
-	retryDelayLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Retry Delay (e.g. 500ms, 1s):")
-	retryDelayInput := m.state.ServerRetryDelay
-	if m.focusedField == 3 {
-		retryDelayInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(retryDelayInput + "_")
-	} else {
-		retryDelayInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(retryDelayInput)
-	}
+	idleBackoffLabels, idleBackoffInputs := renderTwoColumnRow(
+		"Idle (30m, 2h):", m.state.ServerAutoRestartIdle, m.focusedField == 4,
+		"Backoff Max (5m, 30m):", m.state.ServerAutoRestartBackoffMax, m.focusedField == 5,
+	)
 
-	autoRestartIdleLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Idle (e.g. 30m, 2h; empty=off):")
-	autoRestartIdleInput := m.state.ServerAutoRestartIdle
-	if m.focusedField == 4 {
-		autoRestartIdleInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartIdleInput + "_")
-	} else {
-		autoRestartIdleInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartIdleInput)
-	}
+	windowTzLabels, windowTzInputs := renderTwoColumnRow(
+		"Window (HH:MM-HH:MM):", m.state.ServerAutoRestartWindow, m.focusedField == 6,
+		"Timezone:", m.state.ServerAutoRestartTimezone, m.focusedField == 7,
+	)
 
-	autoRestartWindowLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Window (HH:MM-HH:MM; empty=always):")
-	autoRestartWindowInput := m.state.ServerAutoRestartWindow
-	if m.focusedField == 5 {
-		autoRestartWindowInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartWindowInput + "_")
-	} else {
-		autoRestartWindowInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartWindowInput)
-	}
-
-	autoRestartTimezoneLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Timezone (IANA, e.g. Asia/Shanghai; empty=Local):")
-	autoRestartTimezoneInput := m.state.ServerAutoRestartTimezone
-	if m.focusedField == 6 {
-		autoRestartTimezoneInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartTimezoneInput + "_")
-	} else {
-		autoRestartTimezoneInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartTimezoneInput)
-	}
-
-	autoRestartBackoffLabel := MenuItemDimmedStyle.Width(m.contentWidth()).Render("Auto-Restart Backoff Max (e.g. 10m; empty=none):")
-	autoRestartBackoffInput := m.state.ServerAutoRestartBackoffMax
-	if m.focusedField == 7 {
-		autoRestartBackoffInput = InputFieldFocusedStyle.Width(m.inputFieldWidth()).Render(autoRestartBackoffInput + "_")
-	} else {
-		autoRestartBackoffInput = InputFieldStyle.Width(m.inputFieldWidth()).Render(autoRestartBackoffInput)
-	}
-
-	note := MenuItemDimmedStyle.Render("Note: Port 1024-65535 · Durations use Go format · Window is HH:MM-HH:MM in configured tz")
+	note := MenuItemDimmedStyle.Render("Note: Port 1024-65535 · empty = off/default")
 	if m.state.PortTesting {
 		note = lipgloss.JoinHorizontal(lipgloss.Left, note, "  ", StatusPendingStyle.Render("Testing port..."))
 	} else if m.state.PortStatus != "" {
@@ -4104,21 +4083,17 @@ func (m *WizardModel) renderServer() string {
 		lipgloss.Left,
 		title,
 		m.blankLine(),
-		hostLabel, m.fullWidth(hostInput),
+		hostPortLabels,
+		m.fullWidth(hostPortInputs),
 		m.blankLine(),
-		portLabel, m.fullWidth(portInput),
+		retriesDelayLabels,
+		m.fullWidth(retriesDelayInputs),
 		m.blankLine(),
-		retriesLabel, m.fullWidth(retriesInput),
+		idleBackoffLabels,
+		m.fullWidth(idleBackoffInputs),
 		m.blankLine(),
-		retryDelayLabel, m.fullWidth(retryDelayInput),
-		m.blankLine(),
-		autoRestartIdleLabel, m.fullWidth(autoRestartIdleInput),
-		m.blankLine(),
-		autoRestartWindowLabel, m.fullWidth(autoRestartWindowInput),
-		m.blankLine(),
-		autoRestartTimezoneLabel, m.fullWidth(autoRestartTimezoneInput),
-		m.blankLine(),
-		autoRestartBackoffLabel, m.fullWidth(autoRestartBackoffInput),
+		windowTzLabels,
+		m.fullWidth(windowTzInputs),
 		m.blankLine(),
 		note,
 		m.blankLine(),
