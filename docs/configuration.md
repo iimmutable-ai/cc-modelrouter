@@ -65,7 +65,12 @@ Project configuration **completely overrides** global configuration when present
 {
   "server": {
     "port": 8081,
-    "host": "localhost"
+    "host": "localhost",
+    "autoRestartIdle": "30m",
+    "autoRestartWindow": "03:00-05:00",
+    "autoRestartTimezone": "Asia/Shanghai",
+    "autoRestartBackoffMax": "10m",
+    "userAgent": ""
   }
 }
 ```
@@ -74,6 +79,36 @@ Project configuration **completely overrides** global configuration when present
 |-------|------|---------|-------------|
 | `port` | int | 8081 | Port to listen on |
 | `host` | string | localhost | Host to bind to |
+| `autoRestartIdle` | duration string | `""` (disabled) | Self-restart after the server is idle (no requests, zero in-flight connections) for this long. Examples: `30m`, `2h`. Empty disables auto-restart. |
+| `autoRestartWindow` | `HH:MM-HH:MM` | `""` (always) | Restrict restart eligibility to a time-of-day window (24h, strict 2-digit hour and minute). Supports overnight wrap (e.g. `23:00-04:00`). Interpreted in `autoRestartTimezone`. Empty = always eligible. |
+| `autoRestartTimezone` | IANA name | `""` (Local) | Timezone used to evaluate `autoRestartWindow` (e.g. `Asia/Shanghai`, `UTC`). Empty = server local time. |
+| `autoRestartBackoffMax` | duration string | `""` (none) | Cap on a random jitter delay applied after idle fires and before the restart, to desynchronize multiple instances. Empty/`0` = no backoff. |
+| `userAgent` | string | `""` (Claude Code SDK UA) | Overrides the `User-Agent` header sent to providers. Empty = the default that mimics the `@anthropic-ai/sdk` User-Agent Claude Code sends (`@anthropic-ai/sdk/0.30.0 bun/1.3.13 darwin/arm64`). |
+
+### Auto-Restart
+
+The router can restart itself after a sustained idle period, optionally constrained to a time-of-day window. This is useful for recycling long-running daemons to release OS resources or pick up environment changes without interrupting active traffic.
+
+- **Idle gate**: the watcher only fires when there are no in-flight connections and no recent requests for the full `autoRestartIdle` duration.
+- **Window gate**: if `autoRestartWindow` is set, the restart only fires inside that window (evaluated in `autoRestartTimezone`).
+- **Backoff**: when `autoRestartBackoffMax` is set, a random delay between `0` and the configured cap is applied before the restart, so multiple instances behind a fleet don't restart simultaneously.
+- **Restart mechanism**: the new process replaces the old one in-place via `syscall.Exec`, inheriting the listening socket so clients see no dropped connections.
+
+#### Restart outcome log
+
+Auto-restart events are appended to `~/.cc-modelrouter/restarts.jsonl` (one JSON object per line):
+
+| Event | Written when |
+|-------|--------------|
+| `initiated` | Before `syscall.Exec`, in the old process. |
+| `restarted` | On boot, if the new process was spawned with `CCRROUTER_RESTART_FROM` carrying the old instance ID. |
+| `exec_failed` | When `syscall.Exec` errors, in the old process, just before `os.Exit(1)`. |
+
+The absence of a `restarted` record after an `initiated` record means the new process did not come up — a useful failure signal when monitoring long-running instances.
+
+### User-Agent
+
+By default the router sends the same `User-Agent` header Claude Code sends to Anthropic-protocol providers, so provider front-ends (e.g. GLM's `/api/anthropic`) see traffic as if it originated from Claude Code itself. Set `server.userAgent` to override for all providers; whitespace-only values are treated as unset.
 
 ## Provider Configuration
 

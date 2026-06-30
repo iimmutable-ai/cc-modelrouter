@@ -114,18 +114,23 @@ ccrouter start [flags]
 
 **Flags:**
 ```
-  -c, --config string          Path to config file
-  -p, --port int               Port to listen on (overrides config)
-  -H, --host string            Host to bind to (overrides config)
-      --log-destination string Log destination (file|stdout|stderr|path)
-      --log-level string       Log level: debug, info, warn, error
-      --profile string         Route profile to use at startup
+  -c, --config string                Path to config file
+  -p, --port int                     Port to listen on (overrides config)
+  -H, --host string                  Host to bind to (overrides config)
+      --log-destination string       Log destination (file|stdout|stderr|path)
+      --log-level string             Log level: debug, info, warn, error
+      --profile string               Route profile to use at startup
+      --auto-restart-idle duration   Auto-restart after idle period (e.g. 30m, 2h); empty disables
+      --auto-restart-window string   Restrict restart to time window HH:MM-HH:MM (tz from --auto-restart-timezone)
+      --auto-restart-timezone string IANA timezone for --auto-restart-window (e.g. Asia/Shanghai); empty = Local
+      --auto-restart-backoff-max duration  Random backoff cap before restart (e.g. 10m); empty = none
 ```
 
 **Description:**
 - Starts the HTTP server in the foreground
 - Saves instance metadata for management
 - Does NOT launch Claude Code
+- Optional auto-restart policy: when `--auto-restart-idle` is set, the server restarts itself in-place via `syscall.Exec` after the configured idle period (see [Configuration - Auto-Restart](configuration.md#auto-restart))
 
 **Examples:**
 ```bash
@@ -140,6 +145,13 @@ ccrouter start -c /path/to/config.json
 
 # Start with debug logging to stdout
 ccrouter start --log-level=debug --log-destination=stdout
+
+# Auto-restart after 30 minutes idle, only between 03:00-05:00 Asia/Shanghai
+ccrouter start \
+  --auto-restart-idle=30m \
+  --auto-restart-window=03:00-05:00 \
+  --auto-restart-timezone=Asia/Shanghai \
+  --auto-restart-backoff-max=10m
 ```
 
 ---
