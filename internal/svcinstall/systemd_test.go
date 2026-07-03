@@ -2,6 +2,7 @@ package svcinstall
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +101,51 @@ func TestUnitPathFor(t *testing.T) {
 	want := filepath.Join(home, ".config", "systemd", "user", "ccrouter.service")
 	if got != want {
 		t.Errorf("user unit path = %s; want %s", got, want)
+	}
+}
+
+// TestUnitPathFor_SudoUser verifies that when SUDO_USER is set (bare sudo,
+// no -E), unitPathFor(ScopeUser) resolves the unit under the invoking
+// user's home rather than /root. System scope must be unaffected.
+func TestUnitPathFor_SudoUser(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+
+	// User scope under SUDO_USER=current user → /home/<user>/.config/...
+	t.Setenv("SUDO_USER", current.Username)
+	got, err := unitPathFor(ScopeUser)
+	if err != nil {
+		t.Fatalf("unitPathFor(user, sudo): %v", err)
+	}
+	want := filepath.Join(current.HomeDir, ".config", "systemd", "user", "ccrouter.service")
+	if got != want {
+		t.Errorf("user unit path under SUDO_USER=%s = %s; want %s",
+			current.Username, got, want)
+	}
+
+	// System scope must stay at /etc/... regardless of SUDO_USER.
+	gotSys, err := unitPathFor(ScopeSystem)
+	if err != nil {
+		t.Fatalf("unitPathFor(system, sudo): %v", err)
+	}
+	if gotSys != "/etc/systemd/system/ccrouter.service" {
+		t.Errorf("system unit path under SUDO_USER = %s; want /etc/systemd/system/ccrouter.service",
+			gotSys)
+	}
+
+	// User scope with nonexistent SUDO_USER falls back to os.UserHomeDir().
+	t.Setenv("SUDO_USER", "nonexistentuser_ccrouter_test_zzz")
+	osHome, _ := os.UserHomeDir()
+	gotFallback, err := unitPathFor(ScopeUser)
+	if err != nil {
+		t.Fatalf("unitPathFor(user, fallback): %v", err)
+	}
+	wantFallback := filepath.Join(osHome, ".config", "systemd", "user", "ccrouter.service")
+	if gotFallback != wantFallback {
+		t.Errorf("user unit path under bogus SUDO_USER = %s; want %s (fallback)",
+			gotFallback, wantFallback)
 	}
 }
 

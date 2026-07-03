@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // DefaultServiceUser is the unprivileged account provisioned for the
@@ -89,13 +91,15 @@ func renderUnit(opts InstallOptions) (string, error) {
 
 // unitPathFor returns the canonical systemd unit path for a scope.
 // System: /etc/systemd/system/ccrouter.service
-// User:   ~/.config/systemd/user/ccrouter.service
+// User:   ~/.config/systemd/user/ccrouter.service (resolved via
+//         config.EffectiveHomeDir so bare `sudo` writes to the invoking
+//         user's home, not /root).
 func unitPathFor(scope Scope) (string, error) {
 	const fname = "ccrouter.service"
 	if scope == ScopeSystem {
 		return filepath.Join("/etc/systemd/system", fname), nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := config.EffectiveHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for user-scope unit: %w", err)
 	}

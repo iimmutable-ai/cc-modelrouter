@@ -4,14 +4,35 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
+// EffectiveHomeDir returns the home directory that ccrouter should treat as
+// "the user's home" when reading or writing per-user files such as
+// ~/.cc-modelrouter/config.json or ~/.cc-modelrouter/shell_env.sh.
+//
+// Under bare `sudo` (no `-E`), the process runs with HOME pointing at root's
+// home (e.g. /root), which causes os.UserHomeDir() to miss the invoking
+// user's files. sudo sets SUDO_USER to the original invoking user, so when
+// it is present we look up that user's home via os/user.Lookup and prefer
+// it. Any failure (SUDO_USER unset, user.Lookup error, empty HomeDir)
+// falls back to os.UserHomeDir() so non-sudo and root-login paths are
+// unchanged.
+func EffectiveHomeDir() (string, error) {
+	if name := os.Getenv("SUDO_USER"); name != "" {
+		if u, err := user.Lookup(name); err == nil && u.HomeDir != "" {
+			return u.HomeDir, nil
+		}
+	}
+	return os.UserHomeDir()
+}
+
 // GlobalConfigPath returns the global config file path.
 func GlobalConfigPath() string {
-	home, _ := os.UserHomeDir()
+	home, _ := EffectiveHomeDir()
 	return filepath.Join(home, ".cc-modelrouter", "config.json")
 }
 

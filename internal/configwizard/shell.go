@@ -3,30 +3,15 @@ package configwizard
 import (
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
-// EffectiveHomeDir returns the home directory that ccrouter should treat as
-// "the user's home" when reading or writing per-user files such as
-// ~/.cc-modelrouter/shell_env.sh.
-//
-// Under bare `sudo` (no `-E`), the process runs with HOME pointing at root's
-// home (e.g. /root), which causes os.UserHomeDir() to miss the invoking
-// user's files. sudo sets SUDO_USER to the original invoking user, so when
-// it is present we look up that user's home via os/user.Lookup and prefer
-// it. Any failure (SUDO_USER unset, user.Lookup error, empty HomeDir)
-// falls back to os.UserHomeDir() so non-sudo and root-login paths are
-// unchanged.
-func EffectiveHomeDir() (string, error) {
-	if name := os.Getenv("SUDO_USER"); name != "" {
-		if u, err := user.Lookup(name); err == nil && u.HomeDir != "" {
-			return u.HomeDir, nil
-		}
-	}
-	return os.UserHomeDir()
-}
+// EffectiveHomeDir delegates to config.EffectiveHomeDir. Kept for backward
+// compatibility with callers that predate the move to internal/config.
+func EffectiveHomeDir() (string, error) { return config.EffectiveHomeDir() }
 
 // ShellConfig handles shell configuration for API keys.
 type ShellConfig struct {
