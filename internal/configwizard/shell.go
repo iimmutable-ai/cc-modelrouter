@@ -3,9 +3,30 @@ package configwizard
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 )
+
+// EffectiveHomeDir returns the home directory that ccrouter should treat as
+// "the user's home" when reading or writing per-user files such as
+// ~/.cc-modelrouter/shell_env.sh.
+//
+// Under bare `sudo` (no `-E`), the process runs with HOME pointing at root's
+// home (e.g. /root), which causes os.UserHomeDir() to miss the invoking
+// user's files. sudo sets SUDO_USER to the original invoking user, so when
+// it is present we look up that user's home via os/user.Lookup and prefer
+// it. Any failure (SUDO_USER unset, user.Lookup error, empty HomeDir)
+// falls back to os.UserHomeDir() so non-sudo and root-login paths are
+// unchanged.
+func EffectiveHomeDir() (string, error) {
+	if name := os.Getenv("SUDO_USER"); name != "" {
+		if u, err := user.Lookup(name); err == nil && u.HomeDir != "" {
+			return u.HomeDir, nil
+		}
+	}
+	return os.UserHomeDir()
+}
 
 // ShellConfig handles shell configuration for API keys.
 type ShellConfig struct {
@@ -25,7 +46,7 @@ func GetShellConfig() (*ShellConfig, error) {
 	var rcPath string
 	if strings.Contains(shell, "bash") {
 		// Try .bashrc first, then .bash_profile
-		home, _ := os.UserHomeDir()
+		home, _ := EffectiveHomeDir()
 		if _, err := os.Stat(filepath.Join(home, ".bashrc")); err == nil {
 			rcPath = filepath.Join(home, ".bashrc")
 		} else if _, err := os.Stat(filepath.Join(home, ".bash_profile")); err == nil {
@@ -35,7 +56,7 @@ func GetShellConfig() (*ShellConfig, error) {
 		}
 	} else {
 		// Default to zsh
-		home, _ := os.UserHomeDir()
+		home, _ := EffectiveHomeDir()
 		rcPath = filepath.Join(home, ".zshrc")
 	}
 
@@ -166,7 +187,7 @@ func (s *ShellConfig) SourceAllNow(apiKeys map[string]string) {
 // WriteEnvFile writes a shell env file at ~/.cc-modelrouter/shell_env.sh
 // containing export lines for the given API keys. Returns the file path.
 func (s *ShellConfig) WriteEnvFile(apiKeys map[string]string) (string, error) {
-	home, _ := os.UserHomeDir()
+	home, _ := EffectiveHomeDir()
 	dir := filepath.Join(home, ".cc-modelrouter")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create config dir: %w", err)
@@ -195,7 +216,7 @@ func (s *ShellConfig) WriteEnvFile(apiKeys map[string]string) (string, error) {
 // '_' (e.g. "my-provider" → "my_provider") — rename via `ccrouter config`
 // if precision matters.
 func (s *ShellConfig) LoadEnvFile() (map[string]string, error) {
-	home, _ := os.UserHomeDir()
+	home, _ := EffectiveHomeDir()
 	path := filepath.Join(home, ".cc-modelrouter", "shell_env.sh")
 	data, err := os.ReadFile(path)
 	if err != nil {

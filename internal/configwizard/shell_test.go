@@ -2,6 +2,7 @@ package configwizard
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -756,6 +757,59 @@ func TestSyncAllShellExports(t *testing.T) {
 					t.Errorf("expected exactly 1 export for %s, got %d\n--- got ---\n%s",
 						providerName, exportCount, resultStr)
 				}
+			}
+		})
+	}
+}
+
+func TestEffectiveHomeDir(t *testing.T) {
+	// Reference values.
+	osHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir failed: %v", err)
+	}
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current failed: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		unsetFirst bool
+		sudoUser   string
+		want       string
+	}{
+		{
+			name:       "SUDO_USER unset falls back to os.UserHomeDir",
+			unsetFirst: true,
+			want:       osHome,
+		},
+		{
+			name:     "SUDO_USER set to current user resolves to current user's home",
+			sudoUser: current.Username,
+			want:     current.HomeDir,
+		},
+		{
+			name:     "SUDO_USER set to nonexistent user falls back to os.UserHomeDir",
+			sudoUser: "nonexistentuser_ccrouter_test_zzz",
+			want:     osHome,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.unsetFirst {
+				t.Setenv("SUDO_USER", "")
+			} else {
+				t.Setenv("SUDO_USER", tt.sudoUser)
+			}
+
+			got, err := EffectiveHomeDir()
+			if err != nil {
+				t.Fatalf("EffectiveHomeDir returned error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("EffectiveHomeDir() = %q, want %q", got, tt.want)
 			}
 		})
 	}

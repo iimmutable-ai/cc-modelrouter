@@ -312,7 +312,7 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 	}
 	configPath, _ = filepath.Abs(configPath)
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := configwizard.EffectiveHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home dir: %w", err)
 	}
