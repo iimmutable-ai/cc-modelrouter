@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
@@ -28,9 +30,23 @@ type SystemdInstaller struct {
 }
 
 // commandRunner is the package-default runner used when SystemdInstaller.run
-// is nil. It's a thin wrapper around exec.Command that captures stderr.
+// is nil. CombinedOutput captures stderr into the returned byte slice so
+// callers can include it in error messages — without this, failed
+// systemctl invocations surface as bare "exit status 1" with no diagnostic.
 func commandRunner(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+// wrapRunnerErr formats a runner failure with the captured output trimmed
+// of trailing whitespace. Used by Enable/Uninstall so callers see
+// systemctl's actual complaint (e.g. "Failed to connect to bus") instead
+// of a bare exit status. Returns err unchanged when out is empty.
+func wrapRunnerErr(action string, out []byte, err error) error {
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	return fmt.Errorf("%s: %w (output: %s)", action, err, trimmed)
 }
 
 func (s SystemdInstaller) runner() func(string, ...string) ([]byte, error) {
@@ -186,7 +202,9 @@ func (s SystemdInstaller) Install(opts InstallOptions) (InstallResult, error) {
 	return res, nil
 }
 
-// systemctlArgs prefixes --user for ScopeUser.
+// systemctlArgs prefixes --user for ScopeUser. Used only for the
+// non-sudo path (system scope, or user scope running as the actual
+// invoking user). The sudo path uses buildSystemctlCommand instead.
 func systemctlArgs(scope Scope, args ...string) []string {
 	if scope == ScopeUser {
 		return append([]string{"--user"}, args...)
@@ -194,16 +212,114 @@ func systemctlArgs(scope Scope, args ...string) []string {
 	return args
 }
 
+// userUnderSudo reports whether a user-scope install is running under
+// bare sudo. The check takes euid and sudoUser as parameters so the
+// decision is testable without actually running the test process as
+// root; production callers pass os.Geteuid() and os.Getenv("SUDO_USER").
+//
+// In that case user-scope systemctl must run via `runuser -u $SUDO_USER`
+// so it can reach the invoking user's user-systemd instance; root cannot
+// talk to another UID's /run/user/<uid>/systemd/private socket directly.
+func userUnderSudo(scope Scope, euid int, sudoUser string) bool {
+	return scope == ScopeUser && euid == 0 && sudoUser != ""
+}
+
+// buildSystemctlCommand returns the program name and argv (without the
+// program name) for invoking systemctl in the given scope.
+//
+// System scope, or user scope without sudo, is a plain
+// `systemctl [--user] <args>`.
+//
+// User scope under bare sudo becomes
+// `runuser -u <sudoUser> -- env XDG_RUNTIME_DIR=/run/user/<uid>
+//     systemctl --user <args>`
+// so systemctl inherits the invoking user's runtime dir and talks to
+// their user-systemd instance. We use `/usr/bin/env` to set
+// XDG_RUNTIME_DIR only for the systemctl subprocess rather than
+// mutating the parent Go process's environment.
+//
+// euid and sudoUser are passed in (rather than read from the OS) so the
+// command shape is deterministic to test.
+func buildSystemctlCommand(scope Scope, euid int, sudoUser string, userLookup func(string) (*user.User, error), args ...string) (string, []string, error) {
+	if !userUnderSudo(scope, euid, sudoUser) {
+		return "systemctl", systemctlArgs(scope, args...), nil
+	}
+	u, err := userLookup(sudoUser)
+	if err != nil {
+		return "", nil, fmt.Errorf("lookup SUDO_USER %q to drop privileges for user-scope systemctl: %w — re-run without sudo or pick system scope", sudoUser, err)
+	}
+	if _, perr := strconv.Atoi(u.Uid); perr != nil {
+		return "", nil, fmt.Errorf("SUDO_USER %q has non-numeric uid %q", sudoUser, u.Uid)
+	}
+	xrd := "/run/user/" + u.Uid
+	argv := []string{
+		"-u", sudoUser, "--",
+		"env", "XDG_RUNTIME_DIR=" + xrd,
+		"systemctl", "--user",
+	}
+	argv = append(argv, args...)
+	return "runuser", argv, nil
+}
+
+// systemctlUserUnderSudo is the production entry point that reads the
+// real OS state. Tests exercise buildSystemctlCommand + userUnderSudo
+// directly instead.
+func systemctlUserUnderSudo(scope Scope) bool {
+	return userUnderSudo(scope, os.Geteuid(), os.Getenv("SUDO_USER"))
+}
+
+// buildSystemctlCommandForProd resolves the euid/SUDO_USER at call time
+// and uses the real user.Lookup. This is the call site used by Enable
+// and Uninstall; tests use buildSystemctlCommand directly.
+func buildSystemctlCommandForProd(scope Scope, args ...string) (string, []string, error) {
+	return buildSystemctlCommand(scope, os.Geteuid(), os.Getenv("SUDO_USER"), user.Lookup, args...)
+}
+
+// enableLinger runs `loginctl enable-linger <user>` so the user's
+// user-systemd instance starts at boot and survives logout. Without
+// this, a user-scope service installed over SSH stops when the session
+// ends. Best-effort: failure is logged but not fatal because some
+// minimal containers lack a polkit/loginctl setup that permits it.
+func (s SystemdInstaller) enableLinger(username string) error {
+	out, err := s.runner()("loginctl", "enable-linger", username)
+	if err != nil {
+		return wrapRunnerErr(fmt.Sprintf("loginctl enable-linger %s", username), out, err)
+	}
+	return nil
+}
+
 // Enable performs daemon-reload, enable, and start. Each is a separate
 // call so partial failures produce an error message that identifies
-// which step failed.
+// which step failed. For user scope under bare sudo, the systemctl
+// invocation drops to the invoking user via runuser and enables linger
+// so the service survives the SSH session.
 func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 	const serviceName = "ccrouter"
-	if _, err := s.runner()("systemctl", systemctlArgs(opts.Scope, "daemon-reload")...); err != nil {
-		return fmt.Errorf("systemctl daemon-reload: %w", err)
+
+	if systemctlUserUnderSudo(opts.Scope) {
+		// Linger must come first so the user manager is up before we
+		// reload it. Best-effort: warn but continue if it fails — most
+		// production servers already have linger on, and a missing
+		// polkit/loginctl shouldn't block the install.
+		if err := s.enableLinger(os.Getenv("SUDO_USER")); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
+		}
 	}
-	if _, err := s.runner()("systemctl", systemctlArgs(opts.Scope, "enable", "--now", serviceName)...); err != nil {
-		return fmt.Errorf("systemctl enable --now %s: %w", serviceName, err)
+
+	cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "daemon-reload")
+	if err != nil {
+		return err
+	}
+	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
+		return wrapRunnerErr("systemctl daemon-reload", out, err)
+	}
+
+	cmdName, cmdArgs, err = buildSystemctlCommandForProd(opts.Scope, "enable", "--now", serviceName)
+	if err != nil {
+		return err
+	}
+	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
+		return wrapRunnerErr(fmt.Sprintf("systemctl enable --now %s", serviceName), out, err)
 	}
 	return nil
 }
@@ -215,8 +331,12 @@ func (s SystemdInstaller) Uninstall(scope Scope) error {
 	const serviceName = "ccrouter"
 	// stop+disable are best-effort: a not-yet-installed service shouldn't
 	// fail uninstall. We only error on the actual file removal.
-	_, _ = s.runner()("systemctl", systemctlArgs(scope, "stop", serviceName)...)
-	_, _ = s.runner()("systemctl", systemctlArgs(scope, "disable", serviceName)...)
+	if cmdName, cmdArgs, err := buildSystemctlCommandForProd(scope, "stop", serviceName); err == nil {
+		_, _ = s.runner()(cmdName, cmdArgs...)
+	}
+	if cmdName, cmdArgs, err := buildSystemctlCommandForProd(scope, "disable", serviceName); err == nil {
+		_, _ = s.runner()(cmdName, cmdArgs...)
+	}
 	unitPath, err := unitPathFor(scope)
 	if err != nil {
 		return err
@@ -224,6 +344,8 @@ func (s SystemdInstaller) Uninstall(scope Scope) error {
 	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove unit file: %w", err)
 	}
-	_, _ = s.runner()("systemctl", systemctlArgs(scope, "daemon-reload")...)
+	if cmdName, cmdArgs, err := buildSystemctlCommandForProd(scope, "daemon-reload"); err == nil {
+		_, _ = s.runner()(cmdName, cmdArgs...)
+	}
 	return nil
 }

@@ -293,6 +293,9 @@ func confirmAndReview(p *setupprompt.Prompt, ans *collectedAnswers) bool {
 		scopeName = "user-level (current user)"
 	}
 	fmt.Printf("  Service:      %s\n", scopeName)
+	if ans.Scope == svcinstall.ScopeUser && os.Geteuid() == 0 && os.Getenv("SUDO_USER") != "" {
+		fmt.Printf("  Note:         running under sudo — systemctl will drop to user %q via runuser\n", os.Getenv("SUDO_USER"))
+	}
 	names := make([]string, 0, len(ans.APIKeys))
 	for n := range ans.APIKeys {
 		names = append(names, n)
