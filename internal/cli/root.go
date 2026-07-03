@@ -34,6 +34,7 @@ Available Commands:
   logs    Show instance logs
   monitor Live usage monitor with terminal UI
   profile Manage route profiles
+  setup  Guided setup commands (e.g. public-facing HTTPS server)
 
 Use "ccrouter [command] --help" for more information about a command.`,
 		Version: Version,
@@ -51,6 +52,7 @@ Use "ccrouter [command] --help" for more information about a command.`,
 	cmd.AddCommand(NewProfileCommand())
 	cmd.AddCommand(NewKeysCommand())
 	cmd.AddCommand(NewGenCommand())
+	cmd.AddCommand(NewSetupCommand())
 
 	return cmd
 }

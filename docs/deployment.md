@@ -10,6 +10,8 @@ This guide walks through deploying the ccrouter standalone server to a public-fa
 
 If you only need ccrouter locally (laptop-only), skip this guide — `ccrouter code` already does the right thing over loopback.
 
+> **Fast path:** `sudo ccrouter setup server` is a guided installer that walks through everything below — bind address, TLS mode (Let's Encrypt or manual cert), system vs user level, and provider API keys (each validated with a 1-token test request) — then writes the config, the systemd unit, and starts the service. Real keys land in `~/.cc-modelrouter/shell_env.sh` (mode 0600) and `/etc/cc-modelrouter/service.env` (root:ccrouter, mode 0640); `config.json` stores only `${...}` placeholders. This guide is the manual equivalent; use it when you need full control or are debugging what the installer produced.
+
 ## How HTTPS mode works
 
 ccrouter accepts HTTPS directly on the configured `--port`. Two mutually-exclusive certificate sources:
@@ -106,6 +108,8 @@ CLI TLS flags override these fields when both are set.
 ## Running as a systemd service
 
 For production, run ccrouter under systemd so it starts on boot and restarts on crash.
+
+> **Shortcut:** `ccrouter setup server` (see [cli-reference.md](cli-reference.md#ccrouter-setup-server)) automates this entire flow — TLS mode, service level, API-key validation, unit-file generation, and `systemctl enable --now`. The hand-written unit below is the same shape the installer produces; use it when you need full manual control.
 
 ```bash
 sudo tee /etc/systemd/system/ccrouter.service > /dev/null <<'UNIT'

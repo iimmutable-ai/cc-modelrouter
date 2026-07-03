@@ -778,6 +778,82 @@ ccrouter monitor --refresh 2s
 
 ---
 
+### ccrouter setup server
+
+Guided installer for running ccrouter as a public-facing HTTPS service on a Linux server. Walks the operator through bind address, TLS mode, service level, and provider API keys, then installs ccrouter as a systemd service. Each API key is validated with a 1-token test request before being saved.
+
+```bash
+ccrouter setup server [flags]
+```
+
+**Flags:**
+```
+      --dry-run    Print config + unit body to stdout; write nothing, install nothing
+      --config     Override config file path (default: global ~/.cc-modelrouter/config.json)
+```
+
+**Description:**
+
+A non-TUI, sequential Q&A installer (not the Bubble Tea wizard) for bringing up ccrouter on a public-accessible Linux host (Alibaba Cloud SAS, AWS, DigitalOcean, etc.). Walks through five steps:
+
+1. **Bind address** — host (default `0.0.0.0`) + port (default `8443`).
+2. **HTTPS / TLS** — Let's Encrypt autocert (needs a domain + open `:80`/`:443`), manual cert/key files, or plain HTTP (not recommended for public servers).
+3. **Service install level** — system-level (dedicated `ccrouter` user, sudo required) or user-level (runs as current user).
+4. **Provider API keys** — loop adding providers by name (openrouter, bigmodel, gemini, anthropic, openai, aliyun, minimax, or any custom name). Each key is validated via a 1-token test request before being saved; failures can be retried or kept anyway.
+5. **Review** — print the final config and ask for confirmation before writing anything.
+
+Then writes:
+- `~/.cc-modelrouter/config.json` — config with `${CCROUTER_<NAME>_API_KEY}` placeholders (no real keys on disk).
+- `~/.cc-modelrouter/shell_env.sh` (mode 0600) — real keys, sourceable from the admin shell.
+- For system-level installs only: `/etc/cc-modelrouter/service.env` (root:ccrouter, mode 0640) so the unprivileged service user can read the keys.
+- A systemd unit (`/etc/systemd/system/ccrouter.service` system-level, or `~/.config/systemd/user/ccrouter.service` user-level), then `daemon-reload` + `enable --now`.
+
+If the running binary is in `$HOME` or `/tmp`, offers to `cp` it to `/usr/local/bin/ccrouter` before installing the unit. Auto-restart is enabled with idle=1h and backoff-max=5m defaults.
+
+**Secrets handling:**
+
+| Layer | Path | Purpose |
+|-------|------|---------|
+| `config.json` placeholders | `~/.cc-modelrouter/config.json` | Stores `${CCROUTER_<NAME>_API_KEY}` only — shareable, commitable |
+| Interactive shell env | `~/.cc-modelrouter/shell_env.sh` (0600) | Real keys, sourced by the admin user |
+| Service env (system-scope only) | `/etc/cc-modelrouter/service.env` (0640 root:ccrouter) | Real keys readable by the unprivileged service user |
+
+Real keys are captured with echo disabled (`golang.org/x/term.ReadPassword`), validated before being written, never appear in process argv, and are never logged. Existing config is backed up to `config.json.bak.<timestamp>` before overwrite.
+
+**Examples:**
+```bash
+# Interactive install (system or user level chosen at runtime)
+sudo ccrouter setup server
+
+# User-level install (no sudo)
+ccrouter setup server
+
+# Dry-run: print config JSON + unit body, write nothing
+ccrouter setup server --dry-run
+
+# Use a non-default config path
+ccrouter setup server --config /etc/cc-modelrouter/config.json
+```
+
+**Final output** (after a successful install):
+```
+✓ Config written:       /home/admin/.cc-modelrouter/config.json
+✓ API keys written:    /home/admin/.cc-modelrouter/shell_env.sh (mode 0600)
+✓ Service env file:    /etc/cc-modelrouter/service.env (root:ccrouter, 0640)
+✓ Systemd unit:        /etc/systemd/system/ccrouter.service
+✓ Service enabled + started.
+
+To apply API keys in your current shell:
+  source /home/admin/.cc-modelrouter/shell_env.sh
+
+Service status: systemctl status ccrouter
+Service logs:   journalctl -u ccrouter -f
+```
+
+> **Note:** This is the automated equivalent of the manual systemd setup described in [deployment.md#running-as-a-systemd-service](deployment.md#running-as-a-systemd-service). Linux systemd only; macOS launchd and Docker are out of scope.
+
+---
+
 ## Instance Management
 
 ### Instance Metadata

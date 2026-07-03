@@ -360,6 +360,20 @@ func (m *WizardModel) ResolvedKeys() map[string]string {
 	return m.state.ResolvedAPIKeys
 }
 
+// tlsConfigsEqual reports whether two TLS configs are field-by-field equal.
+// Both nil → true; exactly one nil → false. Derived fields (Mode) are not
+// compared — they are computed from the four stored fields.
+func tlsConfigsEqual(a, b *config.TLSConfig) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.CertFile == b.CertFile && a.KeyFile == b.KeyFile &&
+		a.Domain == b.Domain && a.Redirect == b.Redirect
+}
+
 // configsEqual compares two configs for equality.
 func configsEqual(a, b *config.Config) bool {
 	if a == nil && b == nil {
@@ -369,6 +383,27 @@ func configsEqual(a, b *config.Config) bool {
 		return false
 	}
 	if a.Server.Host != b.Server.Host || a.Server.Port != b.Server.Port {
+		return false
+	}
+	if a.Router.MaxRetries != b.Router.MaxRetries {
+		return false
+	}
+	if a.Router.RetryDelay != b.Router.RetryDelay {
+		return false
+	}
+	if a.Server.AutoRestartIdle != b.Server.AutoRestartIdle {
+		return false
+	}
+	if a.Server.AutoRestartWindow != b.Server.AutoRestartWindow {
+		return false
+	}
+	if a.Server.AutoRestartTimezone != b.Server.AutoRestartTimezone {
+		return false
+	}
+	if a.Server.AutoRestartBackoffMax != b.Server.AutoRestartBackoffMax {
+		return false
+	}
+	if !tlsConfigsEqual(a.Server.TLS, b.Server.TLS) {
 		return false
 	}
 	if len(a.Providers) != len(b.Providers) {

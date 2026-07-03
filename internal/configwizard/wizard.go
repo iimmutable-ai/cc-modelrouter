@@ -621,30 +621,40 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 		m.state.CurrentScreen = ScreenMainMenu
 
 	case ScreenServer:
-		// Sync server settings to in-memory config (same validation as handleServerSave)
+		// Sync server settings to in-memory config (same validation as handleServerSave).
+		// Invalid fields are skipped and surfaced via m.state.ErrorMessage so the user
+		// knows which edits were dropped. The previous (in-config) value is retained.
 		host := strings.TrimSpace(m.state.ServerHost)
 		portStr := strings.TrimSpace(m.state.ServerPort)
-		if host != "" {
-			if port, err := strconv.Atoi(portStr); err == nil && port >= 1024 && port <= 65535 {
-				m.state.Config.Server.Host = host
-				m.state.Config.Server.Port = port
-				m.state.HasChanges = true
-			}
+		if host == "" {
+			m.state.ErrorMessage = "Host cannot be empty; kept previous value"
+		} else if port, err := strconv.Atoi(portStr); err != nil || port < 1024 || port > 65535 {
+			m.state.ErrorMessage = "Port must be between 1024 and 65535; kept previous value"
+		} else {
+			m.state.Config.Server.Host = host
+			m.state.Config.Server.Port = port
+			m.state.HasChanges = true
 		}
 		if retries, err := strconv.Atoi(strings.TrimSpace(m.state.ServerMaxRetries)); err == nil && retries >= 0 {
 			m.state.Config.Router.MaxRetries = retries
 			m.state.HasChanges = true
+		} else {
+			m.state.ErrorMessage = "Max retries must be a non-negative integer; kept previous value"
 		}
 		if delay := strings.TrimSpace(m.state.ServerRetryDelay); delay != "" {
 			if _, err := time.ParseDuration(delay); err == nil {
 				m.state.Config.Router.RetryDelay = delay
 				m.state.HasChanges = true
+			} else {
+				m.state.ErrorMessage = "Retry delay is not a valid duration; kept previous value"
 			}
 		}
 		if v := strings.TrimSpace(m.state.ServerAutoRestartIdle); v != "" {
 			if _, err := time.ParseDuration(v); err == nil {
 				m.state.Config.Server.AutoRestartIdle = v
 				m.state.HasChanges = true
+			} else {
+				m.state.ErrorMessage = "Auto-restart idle is not a valid duration; skipped"
 			}
 		} else {
 			m.state.Config.Server.AutoRestartIdle = ""
@@ -654,6 +664,8 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 			if len(parts) == 2 && timeParseHHMM(parts[0]) && timeParseHHMM(parts[1]) {
 				m.state.Config.Server.AutoRestartWindow = v
 				m.state.HasChanges = true
+			} else {
+				m.state.ErrorMessage = "Auto-restart window must be HH:MM-HH:MM; skipped"
 			}
 		} else {
 			m.state.Config.Server.AutoRestartWindow = ""
@@ -662,6 +674,8 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 			if _, err := time.LoadLocation(v); err == nil {
 				m.state.Config.Server.AutoRestartTimezone = v
 				m.state.HasChanges = true
+			} else {
+				m.state.ErrorMessage = "Auto-restart timezone is not a known IANA zone; skipped"
 			}
 		} else {
 			m.state.Config.Server.AutoRestartTimezone = ""
@@ -670,6 +684,8 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 			if _, err := time.ParseDuration(v); err == nil {
 				m.state.Config.Server.AutoRestartBackoffMax = v
 				m.state.HasChanges = true
+			} else {
+				m.state.ErrorMessage = "Auto-restart backoff max is not a valid duration; skipped"
 			}
 		} else {
 			m.state.Config.Server.AutoRestartBackoffMax = ""
@@ -679,9 +695,9 @@ func (m *WizardModel) handleEscape() (tea.Model, tea.Cmd) {
 		tlsKey := strings.TrimSpace(m.state.ServerTLSKey)
 		tlsDomain := strings.TrimSpace(m.state.ServerTLSDomain)
 		if tlsCert != "" && tlsDomain != "" {
-			// Mutual exclusion violation — skip TLS entirely.
+			m.state.ErrorMessage = "TLS: cert+key and domain are mutually exclusive; TLS not saved"
 		} else if (tlsCert != "") != (tlsKey != "") {
-			// Mismatched cert/key — skip TLS entirely.
+			m.state.ErrorMessage = "TLS: cert and key must be specified together; TLS not saved"
 		} else if tlsCert == "" && tlsKey == "" && tlsDomain == "" && !m.state.ServerTLSRedirect {
 			m.state.Config.Server.TLS = nil
 			m.state.HasChanges = true
@@ -4202,6 +4218,7 @@ func (m *WizardModel) renderServer() string {
 		note,
 		m.blankLine(),
 		m.footline("[Esc/Enter] Apply & Back   [Tab] Next field   [Space] Toggle"),
+		HelpTextStyle.Width(m.contentWidth()).Render("TLS: cert+key together · exclusive with domain · autocert (domain) forces Redirect on"),
 	)
 
 	if m.state.ErrorMessage != "" {

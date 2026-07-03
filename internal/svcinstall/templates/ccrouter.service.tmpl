@@ -1,0 +1,26 @@
+[Unit]
+Description=cc-modelrouter LLM proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+{{- if .User}}
+User={{.User}}
+Group={{.Group}}
+{{- end}}
+ExecStart={{.BinaryPath}} start --config {{.ConfigPath}}
+WorkingDirectory={{.HomeDir}}
+EnvironmentFile={{.EnvFile}}
+Restart=on-failure
+RestartSec=5
+{{- if .User}}
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={{.DataDir}}
+PrivateTmp=true
+{{- end}}
+
+[Install]
+WantedBy={{.Target}}

@@ -228,6 +228,16 @@ claude
 
 See [docs/deployment.md](docs/deployment.md) for the full walk-through, troubleshooting, and the config-file equivalent.
 
+#### Guided install (`setup server`)
+
+The fastest path from a fresh Linux VM to a running public HTTPS service is the guided installer — it walks through bind address, TLS mode, service level, and provider API keys (validating each with a 1-token test request), then writes the config, the systemd unit, and starts the service:
+
+```bash
+sudo ccrouter setup server
+```
+
+Real API keys are stored in `~/.cc-modelrouter/shell_env.sh` (mode 0600) and — for system-level installs — `/etc/cc-modelrouter/service.env` (root:ccrouter, mode 0640). `config.json` keeps only `${CCROUTER_<NAME>_API_KEY}` placeholders. See [CLI reference](docs/cli-reference.md#ccrouter-setup-server) for flags including `--dry-run`.
+
 #### Running as a systemd service
 
 For production, run ccrouter under systemd so it starts on boot and restarts on crash.
@@ -574,6 +584,7 @@ When multi-user mode is enabled, three additional tabs are available:
 | `ccrouter status` | Show running instances |
 | `ccrouter clean` | Remove stale instance files |
 | `ccrouter config` | Interactive config wizard (TUI) |
+| `ccrouter setup server` | Guided installer for public HTTPS + systemd (Linux) |
 | `ccrouter logs [id]` | Show instance logs |
 | `ccrouter monitor` | Live usage monitor (TUI) |
 | `ccrouter profile list` | List route profiles |
