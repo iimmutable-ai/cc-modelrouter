@@ -799,7 +799,7 @@ A non-TUI, sequential Q&A installer (not the Bubble Tea wizard) for bringing up 
 1. **Bind address** — host (default `0.0.0.0`) + port (default `8443`).
 2. **HTTPS / TLS** — Let's Encrypt autocert (needs a domain + open `:80`/`:443`), manual cert/key files, or plain HTTP (not recommended for public servers).
 3. **Service install level** — system-level (dedicated `ccrouter` user, sudo required) or user-level (runs as current user).
-4. **Provider API keys** — loop adding providers by name (openrouter, bigmodel, gemini, anthropic, openai, aliyun, minimax, or any custom name). Each key is validated via a 1-token test request before being saved; failures can be retried or kept anyway.
+4. **Provider API keys** — loop adding providers by name (openrouter, bigmodel, gemini, anthropic, openai, aliyun, minimax, or any custom name). Each key is validated via a 1-token test request before being saved; failures can be retried or kept anyway. If `~/.cc-modelrouter/shell_env.sh` already exists, the wizard detects it here and offers to reuse the existing keys for this install — re-running `setup server` on an already-configured host won't clobber your secrets.
 5. **Review** — print the final config and ask for confirmation before writing anything.
 
 Then writes:

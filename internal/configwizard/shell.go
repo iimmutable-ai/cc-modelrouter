@@ -184,6 +184,59 @@ func (s *ShellConfig) WriteEnvFile(apiKeys map[string]string) (string, error) {
 	return path, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
+// LoadEnvFile reads ~/.cc-modelrouter/shell_env.sh and returns a map of
+// provider name → API key. Returns an empty map (nil error) if the file
+// does not exist. Malformed lines are skipped silently.
+//
+// This is the inverse of WriteEnvFile. Provider-name recovery relies on
+// GenerateEnvVarName's rule (uppercase + non-alphanumeric → '_'); for the
+// built-in presets (all lowercase ASCII) the round-trip is exact. Custom
+// provider names containing hyphens or dots will come back lowercased with
+// '_' (e.g. "my-provider" → "my_provider") — rename via `ccrouter config`
+// if precision matters.
+func (s *ShellConfig) LoadEnvFile() (map[string]string, error) {
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".cc-modelrouter", "shell_env.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	return parseEnvExports(string(data)), nil
+}
+
+// parseEnvExports extracts CCROUTER_<NAME>_API_KEY="value" pairs from the
+// shell_env.sh file content into a provider-name → key map.
+func parseEnvExports(content string) map[string]string {
+	out := map[string]string{}
+	const prefix = "export CCROUTER_"
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		eq := strings.Index(trimmed, "=")
+		if eq < 0 {
+			continue
+		}
+		varName := strings.TrimSpace(trimmed[len(prefix):eq])
+		val := strings.TrimSpace(trimmed[eq+1:])
+		val = strings.TrimPrefix(val, `"`)
+		val = strings.TrimSuffix(val, `"`)
+		if !strings.HasSuffix(varName, "_API_KEY") || val == "" {
+			continue
+		}
+		name := strings.TrimSuffix(varName, "_API_KEY")
+		if name == "" {
+			continue
+		}
+		out[strings.ToLower(name)] = val
+	}
+	return out
+}
+
 // GenerateEnvVarName generates the environment variable name for a provider.
 func GenerateEnvVarName(providerName string) string {
 	// Convert to uppercase and replace non-alphanumeric with underscore

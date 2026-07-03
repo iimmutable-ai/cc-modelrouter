@@ -181,6 +181,33 @@ func collectAnswers(p *setupprompt.Prompt) (*collectedAnswers, error) {
 // On EOF (Ctrl-D or end of piped input), the loop aborts immediately so
 // we don't spin forever on empty input.
 func collectProviders(p *setupprompt.Prompt, ans *collectedAnswers) {
+	// Discover existing keys so we don't clobber them on skip.
+	if shellCfg, err := configwizard.GetShellConfig(); err == nil {
+		if existing, err := shellCfg.LoadEnvFile(); err == nil && len(existing) > 0 {
+			names := make([]string, 0, len(existing))
+			for n := range existing {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			fmt.Printf("  Found %d existing provider(s) in ~/.cc-modelrouter/shell_env.sh: %s\n",
+				len(existing), strings.Join(names, ", "))
+			if p.AskYesNo("  Use these providers for this install?", true) {
+				for _, name := range names {
+					preset, hasPreset := configwizard.ProviderPresets[name]
+					testModel := ""
+					if hasPreset && len(preset.Models) > 0 {
+						testModel = preset.Models[0]
+					}
+					ans.APIKeys[name] = existing[name]
+					ans.TestModels[name] = testModel
+				}
+				fmt.Printf("  Loaded %d provider(s).\n", len(ans.APIKeys))
+				if !p.AskYesNo("  Add another provider?", false) {
+					return
+				}
+			}
+		}
+	}
 	for {
 		if p.EOF() {
 			return
@@ -357,6 +384,17 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 	shellCfg, err := configwizard.GetShellConfig()
 	if err != nil {
 		return fmt.Errorf("resolve shell config: %w", err)
+	}
+	// Guard: refuse to overwrite a populated shell_env.sh with zero keys.
+	// This catches the case where the user skipped [4/5] *and* declined
+	// (or never saw) the reuse prompt — e.g. shell_env.sh appeared between
+	// collectAnswers and applyAnswers, or a future code path forgets to
+	// populate ans.APIKeys.
+	if len(ans.APIKeys) == 0 {
+		if existing, err := shellCfg.LoadEnvFile(); err == nil && len(existing) > 0 {
+			return fmt.Errorf("refusing to overwrite %s (%d keys) with empty provider set — re-run and accept the existing providers, or remove the file first",
+				shellEnvPath, len(existing))
+		}
 	}
 	if _, err := shellCfg.WriteEnvFile(ans.APIKeys); err != nil {
 		return fmt.Errorf("write shell_env.sh: %w", err)

@@ -238,6 +238,8 @@ sudo ccrouter setup server
 
 Real API keys are stored in `~/.cc-modelrouter/shell_env.sh` (mode 0600) and — for system-level installs — `/etc/cc-modelrouter/service.env` (root:ccrouter, mode 0640). `config.json` keeps only `${CCROUTER_<NAME>_API_KEY}` placeholders. See [CLI reference](docs/cli-reference.md#ccrouter-setup-server) for flags including `--dry-run`.
 
+> **Reusing existing keys:** if `~/.cc-modelrouter/shell_env.sh` already exists (e.g. from a prior `ccrouter config` run), the installer detects it at step [4/5] and offers to reuse the keys for this install — so re-running `setup server` on a host you've already configured won't clobber your secrets. A backstop guard also refuses to overwrite a populated `shell_env.sh` with an empty provider set.
+
 #### Running as a systemd service
 
 For production, run ccrouter under systemd so it starts on boot and restarts on crash.
@@ -556,6 +558,7 @@ When multi-user mode is enabled, three additional tabs are available:
 - **Standalone Server** — run as a persistent server for any Anthropic-compatible client
 - **Auto-Restart** — `ccrouter start --auto-restart-idle=30m` recycles idle daemons during a configurable time window so long-running servers release OS resources without interrupting active traffic ([docs](docs/configuration.md#auto-restart))
 - **Built-in HTTPS** — `ccrouter start --tls-domain=api.example.com` (Let's Encrypt autocert) or `--tls-cert`/`--tls-key` (manual certs) serves HTTPS directly, with optional `--tls-redirect` from `:80`. For deploying to public hosts like Alibaba Cloud SAS in Korea/HK/Singapore without a reverse proxy ([docs](docs/deployment.md))
+- **Guided Server Install** — `sudo ccrouter setup server` walks through bind/TLS/service level/API keys, validates each key with a live 1-token test request, then writes config + systemd unit + service.env and enables the service. Reuses existing `shell_env.sh` keys when re-run on an already-configured host ([docs](#guided-install-setup-server))
 - **User-Agent Override** — the router sends the same `User-Agent` Claude Code sends to Anthropic-protocol providers by default; override via `server.userAgent` for provider-specific front-ends ([docs](docs/configuration.md#user-agent))
 - **Settings Generation** — `ccrouter gen settings` generates Claude Code settings with proxy URL and API key pre-configured
 - **Request Compaction** — automatic request reduction for providers with context window limits
@@ -632,9 +635,14 @@ cc-modelrouter/
 │   ├── provider/              # HTTP clients for provider APIs
 │   ├── proxy/                 # HTTP proxy server and request handler
 │   ├── qos/                   # QoS engine with WRED and provider capacity tracking
+│   ├── restartlog/            # Auto-restart outcome logging (append-only JSONL)
 │   ├── router/                # Route detection and sequential failover
+│   ├── setupprompt/           # Non-TUI Q&A helpers for `setup server`
+│   ├── svcinstall/            # systemd unit rendering and install
 │   ├── transformer/           # Format transformers (Anthropic, OpenAI, Gemini, GLM)
-│   └── usage/                 # SQLite usage tracking
+│   ├── usage/                 # SQLite usage tracking
+│   ├── useragent/             # Claude Code SDK User-Agent propagation
+│   └── version/               # Build version metadata
 ├── pkg/api/anthropic/         # Anthropic API type definitions
 └── docs/                      # Architecture, config, transformers, troubleshooting
 ```
