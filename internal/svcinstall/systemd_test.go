@@ -501,6 +501,76 @@ func TestWaitForUserSystemdSocket_Ready(t *testing.T) {
 	}
 }
 
+// TestWaitForUserSystemdReady_Ready verifies that when is-system-running
+// returns any output (even with a non-nil err, e.g. "degraded"), the
+// helper treats the manager as ready and returns nil on the first probe.
+func TestWaitForUserSystemdReady_Ready(t *testing.T) {
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"systemctl --user is-system-running": {[]byte("degraded\n"), errors.New("exit status 1")},
+		},
+	}
+	err := waitForUserSystemdReady(runner.run, ScopeUser, "1000", "", 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil (ready); got %v", err)
+	}
+}
+
+// TestWaitForUserSystemdReady_Timeout verifies that when is-system-running
+// returns connection-refused (empty output + err) for the whole budget,
+// the helper surfaces a timeout error mentioning is-system-running.
+func TestWaitForUserSystemdReady_Timeout(t *testing.T) {
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"systemctl --user is-system-running": {[]byte(""), errors.New("exit status 1")},
+		},
+	}
+	err := waitForUserSystemdReady(runner.run, ScopeUser, "1000", "", 150*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "is-system-running") {
+		t.Errorf("timeout error should mention is-system-running; got: %v", err)
+	}
+}
+
+// TestWaitForUserSystemdReady_SudoWrapper verifies that under ScopeUser
+// with sudoUser set, the helper uses the runuser+env wrapper (same shape
+// buildSystemctlCommand produces) rather than a bare systemctl invocation.
+func TestWaitForUserSystemdReady_SudoWrapper(t *testing.T) {
+	// Fake user lookup so we don't depend on /etc/passwd having "admin".
+	// We can't easily inject the lookup into waitForUserSystemdReady
+	// (it calls user.Lookup directly internally via buildSystemctlCommand),
+	// so this test keys the recording runner on the real-shaped command
+	// for whatever user.Lookup("admin") returns on this host. On most
+	// Linux/macOS dev boxes admin exists; if not, the test self-skips.
+	acct, err := user.Lookup("admin")
+	if err != nil {
+		t.Skip("no 'admin' user on this host; skipping wrapper-shape assertion")
+	}
+	sudoCmd := "runuser -u admin -- env XDG_RUNTIME_DIR=/run/user/" + acct.Uid +
+		" DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + acct.Uid + "/bus" +
+		" systemctl --user is-system-running"
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			sudoCmd: {[]byte("running\n"), nil},
+		},
+	}
+	if err := waitForUserSystemdReady(runner.run, ScopeUser, acct.Uid, "admin", 2*time.Second); err != nil {
+		t.Fatalf("expected nil (ready); got %v", err)
+	}
+	found := false
+	for _, c := range runner.calls {
+		if c == sudoCmd {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected probe via runuser wrapper; calls=%v", runner.calls)
+	}
+}
+
 // TestEnable_PollsSocketAfterLinger verifies that Enable, when running
 // as root under SUDO_USER, performs a stat-equivalent probe between
 // enable-linger and daemon-reload. We can't easily force os.Geteuid()==0

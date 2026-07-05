@@ -316,6 +316,45 @@ func waitForUserSystemd(uid string, timeout time.Duration) error {
 	return fmt.Errorf("timed out waiting for %s", socket)
 }
 
+// waitForUserSystemdReady probes the user manager via `systemctl --user
+// is-system-running` until the call connects — i.e. returns any output
+// (even "degraded"/"starting") without a connection-refused style error.
+// The socket file being present only proves the manager is accepting
+// connections; on a freshly-linger-started manager the initial unit
+// directory scan may still be in flight, and a daemon-reload issued in
+// that window returns exit 0 without actually loading units. That race
+// is what produces the misleading "Unit file default.target.wants/
+// ccrouter.service does not exist" error at enable time.
+//
+// `run` is the command runner (real or fake). `scope` and `sudoUser`
+// are passed through to buildSystemctlCommand so the probe uses the
+// same runuser+env wrapper as the subsequent daemon-reload. If the
+// wrapper cannot resolve sudoUser, the function falls back to the
+// socket-poll (waitForUserSystemd) so the non-sudo path is unaffected.
+func waitForUserSystemdReady(run func(string, ...string) ([]byte, error), scope Scope, uid, sudoUser string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		cmdName, cmdArgs, cmdErr := buildSystemctlCommand(scope, 0, sudoUser, func(string) (*user.User, error) {
+			return user.Lookup(sudoUser)
+		}, "is-system-running")
+		if cmdErr != nil {
+			return waitForUserSystemd(uid, timeout)
+		}
+		out, err := run(cmdName, cmdArgs...)
+		// is-system-running exits non-zero with a short status word on
+		// "degraded"/"maintenance"/"starting", but a connection failure
+		// has empty stdout AND a non-nil err. Any non-empty output means
+		// the manager answered — ready.
+		if err == nil || len(bytes.TrimSpace(out)) > 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("user-systemd did not respond to is-system-running within %s (last error: %v)", timeout, err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // uidForUser looks up a username and returns its uid string. Wraps
 // user.Lookup so callers don't repeat the lookup that buildSystemctlCommand
 // already does.
@@ -348,7 +387,8 @@ func (s SystemdInstaller) enableLinger(username string) error {
 func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 	const serviceName = "ccrouter"
 
-	if systemctlUserUnderSudo(opts.Scope) {
+	isUserUnderSudo := systemctlUserUnderSudo(opts.Scope)
+	if isUserUnderSudo {
 		sudoUser := os.Getenv("SUDO_USER")
 		// Linger must come first so the user manager is up before we
 		// reload it. Best-effort: warn but continue if it fails — most
@@ -358,29 +398,47 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
 		}
 		// enable-linger returns immediately but the user manager starts
-		// asynchronously. Poll for the private socket before issuing
-		// daemon-reload so we don't race it.
+		// asynchronously. Probe is-system-running until the manager
+		// actually answers (not just until the socket appears — a freshly
+		// started manager can take a moment before it loads its unit
+		// directory, and a daemon-reload issued in that window returns
+		// exit 0 without scanning).
 		if uid, err := uidForUser(sudoUser); err == nil {
-			if err := waitForUserSystemd(uid, 5*time.Second); err != nil {
+			if err := waitForUserSystemdReady(s.runner(), opts.Scope, uid, sudoUser, 10*time.Second); err != nil {
 				return fmt.Errorf("user-systemd did not come up after enable-linger: %w — try `loginctl enable-linger %s` manually, then re-run", err, sudoUser)
 			}
 		}
 	}
 
-	cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "daemon-reload")
+	// daemon-reload: for user scope under sudo we fire it twice with a
+	// short gap. The first reload primes the manager's queue; the second
+	// (after the readiness probe confirmed it's serving) is the one that
+	// reliably picks up newly-written unit files. Single-reload empirically
+	// races on Aliyun ECS with systemd 245+. The non-sudo path keeps a
+	// single reload — no race window there.
+	reloadCount := 1
+	if isUserUnderSudo {
+		reloadCount = 2
+	}
+	for i := 0; i < reloadCount; i++ {
+		cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "daemon-reload")
+		if err != nil {
+			return err
+		}
+		action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
+		if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
+			return wrapRunnerErr(action, out, err)
+		}
+		if i+1 < reloadCount {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+
+	cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "enable", "--now", serviceName)
 	if err != nil {
 		return err
 	}
 	action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
-	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
-		return wrapRunnerErr(action, out, err)
-	}
-
-	cmdName, cmdArgs, err = buildSystemctlCommandForProd(opts.Scope, "enable", "--now", serviceName)
-	if err != nil {
-		return err
-	}
-	action = fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
 	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
 		return wrapRunnerErr(action, out, err)
 	}

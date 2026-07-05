@@ -467,7 +467,12 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 
 	if err := installer.Enable(installOpts, res.UnitPath); err != nil {
 		fmt.Printf("⚠ Enable failed: %v\n", err)
-		fmt.Println("  The unit file is written. Run `systemctl daemon-reload && systemctl enable --now ccrouter` manually.")
+		scopeFlagManual := ""
+		if ans.Scope == svcinstall.ScopeUser {
+			scopeFlagManual = "--user "
+		}
+		fmt.Printf("  The unit file is written. Run `systemctl %sdaemon-reload && systemctl %senable --now ccrouter` manually.\n",
+			scopeFlagManual, scopeFlagManual)
 	} else {
 		fmt.Println("✓ Service enabled + started.")
 	}
