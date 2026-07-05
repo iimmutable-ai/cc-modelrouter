@@ -2,6 +2,7 @@ package svcinstall
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
@@ -40,11 +42,22 @@ func commandRunner(name string, args ...string) ([]byte, error) {
 // wrapRunnerErr formats a runner failure with the captured output trimmed
 // of trailing whitespace. Used by Enable/Uninstall so callers see
 // systemctl's actual complaint (e.g. "Failed to connect to bus") instead
-// of a bare exit status. Returns err unchanged when out is empty.
+// of a bare exit status.
+//
+// Three forms:
+//   - LookPath failure (*exec.Error): friendly "not found in PATH" hint,
+//     since the bare "exit status 1" form otherwise hides the real cause.
+//   - Empty output: appends " (no output)" so the bare form is at least
+//     self-describing instead of looking like an unannotated status code.
+//   - Non-empty output: appends " (output: <trimmed>)".
 func wrapRunnerErr(action string, out []byte, err error) error {
 	trimmed := strings.TrimSpace(string(out))
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return fmt.Errorf("%s: %q not found in PATH — install util-linux (provides runuser) or re-run setup without sudo", action, execErr.Name)
+	}
 	if trimmed == "" {
-		return fmt.Errorf("%s: %w", action, err)
+		return fmt.Errorf("%s: %w (no output)", action, err)
 	}
 	return fmt.Errorf("%s: %w (output: %s)", action, err, trimmed)
 }
@@ -232,11 +245,14 @@ func userUnderSudo(scope Scope, euid int, sudoUser string) bool {
 //
 // User scope under bare sudo becomes
 // `runuser -u <sudoUser> -- env XDG_RUNTIME_DIR=/run/user/<uid>
+//     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus
 //     systemctl --user <args>`
-// so systemctl inherits the invoking user's runtime dir and talks to
-// their user-systemd instance. We use `/usr/bin/env` to set
-// XDG_RUNTIME_DIR only for the systemctl subprocess rather than
-// mutating the parent Go process's environment.
+// so systemctl inherits the invoking user's runtime dir AND D-Bus session
+// bus address, letting it talk to their user-systemd instance. Both env
+// vars are required on modern systemd — XDG_RUNTIME_DIR alone is not
+// enough to locate the session bus. We use `/usr/bin/env` to set them
+// only for the systemctl subprocess rather than mutating the parent Go
+// process's environment.
 //
 // euid and sudoUser are passed in (rather than read from the OS) so the
 // command shape is deterministic to test.
@@ -254,7 +270,9 @@ func buildSystemctlCommand(scope Scope, euid int, sudoUser string, userLookup fu
 	xrd := "/run/user/" + u.Uid
 	argv := []string{
 		"-u", sudoUser, "--",
-		"env", "XDG_RUNTIME_DIR=" + xrd,
+		"env",
+		"XDG_RUNTIME_DIR=" + xrd,
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + xrd + "/bus",
 		"systemctl", "--user",
 	}
 	argv = append(argv, args...)
@@ -273,6 +291,40 @@ func systemctlUserUnderSudo(scope Scope) bool {
 // and Uninstall; tests use buildSystemctlCommand directly.
 func buildSystemctlCommandForProd(scope Scope, args ...string) (string, []string, error) {
 	return buildSystemctlCommand(scope, os.Geteuid(), os.Getenv("SUDO_USER"), user.Lookup, args...)
+}
+
+// userSystemdSocketPath returns the private socket path for the user
+// manager of the given uid. Exposed as a helper so tests can compute the
+// same path the production code polls.
+func userSystemdSocketPath(uid string) string {
+	return "/run/user/" + uid + "/systemd/private"
+}
+
+// waitForUserSystemd polls the user-systemd private socket until it
+// appears or timeout elapses. enableLinger triggers the user manager
+// asynchronously; without this wait, daemon-reload fired immediately
+// after can race the manager coming up and exit 1 with no diagnostic.
+func waitForUserSystemd(uid string, timeout time.Duration) error {
+	socket := userSystemdSocketPath(uid)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if st, err := os.Stat(socket); err == nil && !st.IsDir() {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for %s", socket)
+}
+
+// uidForUser looks up a username and returns its uid string. Wraps
+// user.Lookup so callers don't repeat the lookup that buildSystemctlCommand
+// already does.
+func uidForUser(name string) (string, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return "", err
+	}
+	return u.Uid, nil
 }
 
 // enableLinger runs `loginctl enable-linger <user>` so the user's
@@ -297,12 +349,21 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 	const serviceName = "ccrouter"
 
 	if systemctlUserUnderSudo(opts.Scope) {
+		sudoUser := os.Getenv("SUDO_USER")
 		// Linger must come first so the user manager is up before we
 		// reload it. Best-effort: warn but continue if it fails — most
 		// production servers already have linger on, and a missing
 		// polkit/loginctl shouldn't block the install.
-		if err := s.enableLinger(os.Getenv("SUDO_USER")); err != nil {
+		if err := s.enableLinger(sudoUser); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
+		}
+		// enable-linger returns immediately but the user manager starts
+		// asynchronously. Poll for the private socket before issuing
+		// daemon-reload so we don't race it.
+		if uid, err := uidForUser(sudoUser); err == nil {
+			if err := waitForUserSystemd(uid, 5*time.Second); err != nil {
+				return fmt.Errorf("user-systemd did not come up after enable-linger: %w — try `loginctl enable-linger %s` manually, then re-run", err, sudoUser)
+			}
 		}
 	}
 
@@ -310,16 +371,18 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 	if err != nil {
 		return err
 	}
+	action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
 	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
-		return wrapRunnerErr("systemctl daemon-reload", out, err)
+		return wrapRunnerErr(action, out, err)
 	}
 
 	cmdName, cmdArgs, err = buildSystemctlCommandForProd(opts.Scope, "enable", "--now", serviceName)
 	if err != nil {
 		return err
 	}
+	action = fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
 	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
-		return wrapRunnerErr(fmt.Sprintf("systemctl enable --now %s", serviceName), out, err)
+		return wrapRunnerErr(action, out, err)
 	}
 	return nil
 }

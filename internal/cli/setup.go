@@ -319,9 +319,16 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 	if err != nil {
 		return fmt.Errorf("resolve home dir: %w", err)
 	}
+	logging.Debugf("[SETUP] env: SUDO_USER=%q SUDO_UID=%q HOME=%q EffectiveHomeDir=%q",
+		os.Getenv("SUDO_USER"), os.Getenv("SUDO_UID"), os.Getenv("HOME"), homeDir)
 	dataDir := filepath.Join(homeDir, ".cc-modelrouter")
 	shellEnvPath := filepath.Join(dataDir, "shell_env.sh")
 	serviceEnvPath := "/etc/cc-modelrouter/service.env"
+
+	if !strings.HasPrefix(configPath, homeDir) {
+		logging.Warnf("[SETUP] path inconsistency: configPath=%s EffectiveHomeDir=%s shellEnvPath=%s",
+			configPath, homeDir, shellEnvPath)
+	}
 
 	cfg := buildConfig(ans)
 
