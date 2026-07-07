@@ -136,12 +136,64 @@ func unitPathFor(scope Scope) (string, error) {
 }
 
 // writeFileWithMode writes content to path with the given mode, creating
-// parent directories as needed.
+// parent directories as needed. On permission error, falls back to sudo
+// (mkdir + tee + chmod) so the caller doesn't need to pre-escalate.
+// May trigger an interactive sudo prompt; call only from a terminal context.
 func writeFileWithMode(path, content string, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create dir for %s: %w", path, err)
 	}
-	return os.WriteFile(path, []byte(content), mode)
+	writeErr := os.WriteFile(path, []byte(content), mode)
+	if writeErr == nil {
+		return nil
+	}
+	if !os.IsPermission(writeErr) {
+		return fmt.Errorf("write %s: %w", path, writeErr)
+	}
+
+	// Permission denied — fall back to sudo. Try non-interactive first
+	// (fails immediately if a password is needed), then retry with
+	// interactive sudo so the user can enter a password at the prompt.
+	if _, sudoErr := exec.LookPath("sudo"); sudoErr != nil {
+		return fmt.Errorf("write %s: %w — re-run with sudo", path, writeErr)
+	}
+
+	// sudoWrite runs a sudo command: try -n first (non-interactive), then
+	// fall back to interactive if a password is needed.
+	sudoWrite := func(args ...string) error {
+		cmdArgs := append([]string{"-n"}, args...)
+		if _, err := exec.Command("sudo", cmdArgs...).CombinedOutput(); err != nil {
+			if _, err := exec.Command("sudo", args...).CombinedOutput(); err != nil {
+				return fmt.Errorf("sudo %s: %w", strings.Join(args, " "), err)
+			}
+		}
+		return nil
+	}
+
+	if err := sudoWrite("mkdir", "-p", dir); err != nil {
+		return fmt.Errorf("create dir for %s: %w", path, err)
+	}
+	if err := sudoWriteTee(path, content); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return sudoWrite("chmod", fmt.Sprintf("%04o", mode), path)
+}
+
+// sudoWriteTee pipes content to `sudo tee <path>`, trying -n first then
+// interactive. Content goes through stdin — never in process argv.
+func sudoWriteTee(path, content string) error {
+	// Try non-interactive first.
+	tee := exec.Command("sudo", "-n", "tee", path)
+	tee.Stdin = strings.NewReader(content)
+	if _, err := tee.CombinedOutput(); err == nil {
+		return nil
+	}
+	// Non-interactive failed (password needed); retry interactively.
+	tee = exec.Command("sudo", "tee", path)
+	tee.Stdin = strings.NewReader(content)
+	_, err := tee.CombinedOutput()
+	return err
 }
 
 // ensureSystemUser provisions the runtime user for ScopeSystem. If the

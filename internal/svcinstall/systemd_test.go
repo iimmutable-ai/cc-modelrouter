@@ -187,6 +187,76 @@ func TestWriteFileWithMode_CreatesDirsAndSetsPerm(t *testing.T) {
 	}
 }
 
+func TestWriteFileWithMode_PermissionDenied_SuggestsSudo(t *testing.T) {
+	// Create a read-only directory so os.WriteFile gets EACCES.
+	tmp := t.TempDir()
+	readOnlyDir := filepath.Join(tmp, "readonly")
+	if err := os.MkdirAll(readOnlyDir, 0555); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	defer os.Chmod(readOnlyDir, 0755) // cleanup
+
+	path := filepath.Join(readOnlyDir, "unit.service")
+	err := writeFileWithMode(path, "[Unit]\nDescription=test\n", 0644)
+	// The direct write will fail with permission denied, then the sudo
+	// fallback will attempt sudo mkdir/tee. We don't assert success because
+	// sudo may need a password in CI; we only assert that the fallback
+	// was attempted (error mentions sudo).
+	if err == nil {
+		// sudo tee actually worked (passwordless sudo in this env).
+		return
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "sudo") {
+		t.Errorf("expected sudo-related error message (fallback was attempted), got: %v", msg)
+	}
+}
+
+func TestWriteFileWithMode_NonPermissionError_NoSudoFallback(t *testing.T) {
+	// Use an excessively long filename to trigger ENAMETOOLONG —
+	// a non-permission error that should NOT invoke sudo.
+	tmp := t.TempDir()
+	longName := strings.Repeat("a", 300)
+	path := filepath.Join(tmp, longName)
+	err := writeFileWithMode(path, "data", 0644)
+	if err == nil {
+		t.Fatal("expected error for excessively long filename")
+	}
+	t.Logf("underlying error: %v", err)
+	msg := err.Error()
+	// Non-permission errors should NOT mention sudo.
+	if strings.Contains(msg, "sudo") {
+		t.Errorf("non-permission error should not mention sudo: %v", msg)
+	}
+}
+
+func TestWriteFileWithMode_SudoNotFound_ReturnsHint(t *testing.T) {
+	// Remove sudo from PATH so the fallback cannot find it.
+	tmp := t.TempDir()
+	readOnlyDir := filepath.Join(tmp, "readonly")
+	if err := os.MkdirAll(readOnlyDir, 0555); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	defer os.Chmod(readOnlyDir, 0755)
+
+	// Save and restore PATH. Use only the empty dir so sudo is unfound.
+	origPATH := os.Getenv("PATH")
+	emptyDir := filepath.Join(tmp, "empty")
+	os.MkdirAll(emptyDir, 0755)
+	t.Setenv("PATH", emptyDir)
+	defer os.Setenv("PATH", origPATH)
+
+	path := filepath.Join(readOnlyDir, "unit.service")
+	err := writeFileWithMode(path, "[Unit]\nDescription=test\n", 0644)
+	if err == nil {
+		t.Fatal("expected error when sudo not found")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "re-run with sudo") {
+		t.Errorf("expected 're-run with sudo' hint, got: %v", msg)
+	}
+}
+
 func TestInstall_SystemScope_RendersUnit(t *testing.T) {
 	// Exercise renderUnit + writeFileWithMode end-to-end against a tmp
 	// path. We can't easily redirect /etc/systemd/system from a test, so
