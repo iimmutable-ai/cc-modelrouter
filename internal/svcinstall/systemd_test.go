@@ -696,3 +696,252 @@ func TestEnable_SurfacesResolvedCommand(t *testing.T) {
 		t.Errorf("error should annotate the empty-output case; got: %s", msg)
 	}
 }
+
+// statefulRunner is a test runner that uses a per-call function to return
+// different responses on successive invocations of the same command. This
+// is needed for waitForUnitLoaded tests where the "show" command is called
+// repeatedly and must return different LoadState values over time.
+type statefulRunner struct {
+	calls   []string
+	respond func(name string, args ...string) ([]byte, error)
+}
+
+func (r *statefulRunner) run(name string, args ...string) ([]byte, error) {
+	key := name + " " + strings.Join(args, " ")
+	r.calls = append(r.calls, key)
+	return r.respond(name, args...)
+}
+
+// TestWaitForUnitLoaded_ImmediateSuccess verifies that when daemon-reload
+// succeeds and show returns "loaded" on the first poll, no retries occur.
+func TestWaitForUnitLoaded_ImmediateSuccess(t *testing.T) {
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			if strings.Contains(key, "daemon-reload") {
+				return []byte(""), nil
+			}
+			if strings.Contains(key, "show") {
+				return []byte("LoadState=loaded\n"), nil
+			}
+			return []byte(""), nil
+		},
+	}
+	err := waitForUnitLoaded(runner.run, ScopeUser, 1000, "", "ccrouter", 5*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil; got %v", err)
+	}
+	// Exactly 1 daemon-reload + 1 show
+	if len(runner.calls) != 2 {
+		t.Errorf("expected 2 calls (reload + show), got %d: %v", len(runner.calls), runner.calls)
+	}
+}
+
+// TestWaitForUnitLoaded_RetriesUntilLoaded verifies the retry loop: when
+// show returns "not-found" twice then "loaded", the function retries and
+// succeeds. Uses a very short poll interval to keep the test fast.
+func TestWaitForUnitLoaded_RetriesUntilLoaded(t *testing.T) {
+	showCount := 0
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			if strings.Contains(key, "daemon-reload") {
+				return []byte(""), nil
+			}
+			if strings.Contains(key, "show") {
+				showCount++
+				if showCount <= 2 {
+					return []byte("LoadState=not-found\n"), nil
+				}
+				return []byte("LoadState=loaded\n"), nil
+			}
+			return []byte(""), nil
+		},
+	}
+	// Override the poll interval by passing a very short timeout.
+	// With 500ms poll interval, we need at least 2.5s timeout for 2 retries.
+	// But since we control the respond function, any timeout works.
+	err := waitForUnitLoaded(runner.run, ScopeUser, 1000, "", "ccrouter", 3*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil after retries; got %v", err)
+	}
+	var reloadCalls, showCalls int
+	for _, c := range runner.calls {
+		if strings.Contains(c, "daemon-reload") {
+			reloadCalls++
+		}
+		if strings.Contains(c, "show") {
+			showCalls++
+		}
+	}
+	if reloadCalls != 1 {
+		t.Errorf("expected 1 daemon-reload, got %d", reloadCalls)
+	}
+	if showCalls != 3 {
+		t.Errorf("expected 3 show calls (not-found, not-found, loaded), got %d", showCalls)
+	}
+}
+
+// TestWaitForUnitLoaded_Timeout verifies that when the unit never loads,
+// the function returns an error mentioning the service name and daemon-reload.
+func TestWaitForUnitLoaded_Timeout(t *testing.T) {
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			if strings.Contains(key, "daemon-reload") {
+				return []byte(""), nil
+			}
+			if strings.Contains(key, "show") {
+				return []byte("LoadState=not-found\n"), nil
+			}
+			return []byte(""), nil
+		},
+	}
+	err := waitForUnitLoaded(runner.run, ScopeUser, 1000, "", "ccrouter", 200*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ccrouter") {
+		t.Errorf("error should mention service name; got: %s", msg)
+	}
+	if !strings.Contains(msg, "daemon-reload") {
+		t.Errorf("error should mention daemon-reload; got: %s", msg)
+	}
+}
+
+// TestWaitForUnitLoaded_DaemonReloadFailure verifies that when daemon-reload
+// itself fails, the function returns immediately (no retry loop).
+func TestWaitForUnitLoaded_DaemonReloadFailure(t *testing.T) {
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			if strings.Contains(key, "daemon-reload") {
+				return []byte("Bus error\n"), errors.New("exit status 1")
+			}
+			return []byte(""), nil
+		},
+	}
+	err := waitForUnitLoaded(runner.run, ScopeUser, 1000, "", "ccrouter", 5*time.Second)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("expected only 1 call (failed daemon-reload), got %d: %v", len(runner.calls), runner.calls)
+	}
+	if !strings.Contains(err.Error(), "Bus error") {
+		t.Errorf("error should contain stderr output; got: %s", err.Error())
+	}
+}
+
+// TestWaitForUnitLoaded_FatalStates verifies that masked, bad-setting, and
+// error LoadState values surface immediately without retrying.
+func TestWaitForUnitLoaded_FatalStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		loadErr []byte
+		want    string
+	}{
+		{"masked", nil, "masked"},
+		{"bad-setting", []byte("LoadError=invalid value\n"), "bad-setting"},
+		{"error", []byte("LoadError=missing section\n"), "error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &statefulRunner{
+				respond: func(name string, args ...string) ([]byte, error) {
+					key := name + " " + strings.Join(args, " ")
+					if strings.Contains(key, "daemon-reload") {
+						return []byte(""), nil
+					}
+					if strings.Contains(key, "show") && strings.Contains(key, "LoadState") {
+						return []byte("LoadState=" + tt.name + "\n"), nil
+					}
+					if strings.Contains(key, "LoadError") {
+						if tt.loadErr != nil {
+							return tt.loadErr, nil
+						}
+						return []byte("LoadError=(null)\n"), nil
+					}
+					return []byte(""), nil
+				},
+			}
+			err := waitForUnitLoaded(runner.run, ScopeUser, 1000, "", "ccrouter", 5*time.Second)
+			if err == nil {
+				t.Fatalf("expected fatal error for %s, got nil", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should mention %q; got: %s", tt.want, err.Error())
+			}
+			// Should be 1 daemon-reload + 1 show (no retries)
+			if len(runner.calls) > 3 {
+				t.Errorf("fatal state should not trigger retries; got %d calls: %v", len(runner.calls), runner.calls)
+			}
+		})
+	}
+}
+
+// TestWaitForUnitLoaded_SudoWrapper verifies that under sudo (euid=0,
+// sudoUser set), the daemon-reload and show commands go through the
+// runuser+env wrapper. Uses fakeUserLookup to avoid /etc/passwd dependency.
+func TestWaitForUnitLoaded_SudoWrapper(t *testing.T) {
+	if _, err := user.Lookup("admin"); err != nil {
+		t.Skip("no 'admin' user on this host; skipping sudo wrapper test")
+	}
+	lookup := fakeUserLookup("admin", "1000", "/home/admin")
+	// Build the expected sudo-shaped keys using buildSystemctlCommand.
+	reloadName, reloadArgs, _ := buildSystemctlCommand(ScopeUser, 0, "admin", lookup, "daemon-reload")
+	reloadKey := reloadName + " " + strings.Join(reloadArgs, " ")
+	showName, showArgs, _ := buildSystemctlCommand(ScopeUser, 0, "admin", lookup, "show", "ccrouter", "--property=LoadState")
+	showKey := showName + " " + strings.Join(showArgs, " ")
+
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			reloadKey: {[]byte(""), nil},
+			showKey:   {[]byte("LoadState=loaded\n"), nil},
+		},
+	}
+	err := waitForUnitLoaded(runner.run, ScopeUser, 0, "admin", "ccrouter", 5*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil; got %v", err)
+	}
+	foundReload, foundShow := false, false
+	for _, c := range runner.calls {
+		if c == reloadKey {
+			foundReload = true
+		}
+		if c == showKey {
+			foundShow = true
+		}
+	}
+	if !foundReload {
+		t.Errorf("missing sudo-shaped daemon-reload call; calls=%v", runner.calls)
+	}
+	if !foundShow {
+		t.Errorf("missing sudo-shaped show call; calls=%v", runner.calls)
+	}
+}
+
+// TestWaitForUserSystemdReady_RejectsStarting verifies that the tightened
+// readiness probe does NOT accept "starting" as a ready state. It should
+// keep polling until the status changes to something like "running".
+func TestWaitForUserSystemdReady_RejectsStarting(t *testing.T) {
+	callIdx := 0
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			callIdx++
+			// First 2 calls return "starting", third returns "running"
+			if callIdx <= 2 {
+				return []byte("starting\n"), errors.New("exit status 3")
+			}
+			return []byte("running\n"), nil
+		},
+	}
+	err := waitForUserSystemdReady(runner.run, ScopeUser, "1000", "", 3*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil after starting->running; got %v", err)
+	}
+	if callIdx != 3 {
+		t.Errorf("expected 3 probes (starting, starting, running), got %d", callIdx)
+	}
+}

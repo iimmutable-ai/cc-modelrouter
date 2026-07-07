@@ -343,10 +343,14 @@ func waitForUserSystemdReady(run func(string, ...string) ([]byte, error), scope 
 		out, err := run(cmdName, cmdArgs...)
 		// is-system-running exits non-zero with a short status word on
 		// "degraded"/"maintenance"/"starting", but a connection failure
-		// has empty stdout AND a non-nil err. Any non-empty output means
-		// the manager answered — ready.
-		if err == nil || len(bytes.TrimSpace(out)) > 0 {
-			return nil
+		// has empty stdout AND a non-nil err. We must reject "starting"
+		// because the manager's initial coldplug (unit directory scan)
+		// is still in flight — a daemon-reload issued during coldplug
+		// gets merged into the coldplug job (systemd #11499) and becomes
+		// a no-op, leaving the unit unloaded.
+		status := strings.TrimSpace(string(out))
+		if status != "" && status != "starting" {
+			return nil // running, degraded, maintenance — coldplug done
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("user-systemd did not respond to is-system-running within %s (last error: %v)", timeout, err)
@@ -354,6 +358,101 @@ func waitForUserSystemdReady(run func(string, ...string) ([]byte, error), scope 
 		time.Sleep(250 * time.Millisecond)
 	}
 }
+// waitForUnitLoaded ensures a unit is actually present in the systemd
+// manager's database before we attempt enable. It fires daemon-reload
+// once (synchronous on systemd 245+ -- exit 0 means scan is complete),
+// then polls LoadState without re-issuing reload to avoid the reload-merge
+// antipattern (systemd #11499). If the poll exhausts its budget, a single
+// retry reload is attempted with a 1s gap.
+//
+// Fatal LoadState values (masked, bad-setting, error) surface immediately.
+func waitForUnitLoaded(
+	run func(string, ...string) ([]byte, error),
+	scope Scope, euid int, sudoUser string,
+	serviceName string, timeout time.Duration,
+) error {
+	buildCmd := func(args ...string) (string, []string, error) {
+		return buildSystemctlCommand(scope, euid, sudoUser, user.Lookup, args...)
+	}
+
+	// Phase 1: daemon-reload (once).
+	reloadName, reloadArgs, err := buildCmd("daemon-reload")
+	if err != nil {
+		return err
+	}
+	reloadAction := fmt.Sprintf("%s %s", reloadName, strings.Join(reloadArgs, " "))
+	if out, err := run(reloadName, reloadArgs...); err != nil {
+		return wrapRunnerErr(reloadAction, out, err)
+	}
+
+	// Phase 2: poll LoadState at 500ms intervals.
+	pollInterval := 500 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		showName, showArgs, err := buildCmd("show", serviceName, "--property=LoadState")
+		if err != nil {
+			return err
+		}
+		out, err := run(showName, showArgs...)
+		ls := parseLoadState(out, err)
+		switch ls {
+		case "loaded":
+			return nil
+		case "masked":
+			return fmt.Errorf("unit %s is masked -- run `systemctl --user unmask %s` first", serviceName, serviceName)
+		case "bad-setting", "error":
+			detail := fetchLoadError(run, buildCmd, serviceName)
+			return fmt.Errorf("unit %s failed to load (%s)%s", serviceName, ls, detail)
+		}
+		time.Sleep(pollInterval)
+	}
+
+	// Phase 3: one retry reload with breathing room.
+	if out, err := run(reloadName, reloadArgs...); err != nil {
+		return wrapRunnerErr(reloadAction, out, err)
+	}
+	time.Sleep(1 * time.Second)
+	showName, showArgs, _ := buildCmd("show", serviceName, "--property=LoadState")
+	out, _ := run(showName, showArgs...)
+	ls := parseLoadState(out, nil)
+	if ls == "loaded" {
+		return nil
+	}
+	return fmt.Errorf("user-systemd did not load unit %s within %s -- run `systemctl --user daemon-reload` manually, then re-run setup", serviceName, timeout)
+}
+
+// parseLoadState extracts the LoadState value from systemctl show output.
+func parseLoadState(out []byte, err error) string {
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(out))
+	if strings.HasPrefix(line, "LoadState=") {
+		return strings.TrimPrefix(line, "LoadState=")
+	}
+	return line
+}
+
+// fetchLoadError retrieves the LoadError property for diagnostic messages.
+func fetchLoadError(run func(string, ...string) ([]byte, error), buildCmd func(...string) (string, []string, error), serviceName string) string {
+	name, args, err := buildCmd("show", serviceName, "--property=LoadError")
+	if err != nil {
+		return ""
+	}
+	out, err := run(name, args...)
+	if err != nil {
+		return ""
+	}
+	detail := strings.TrimSpace(string(out))
+	if strings.HasPrefix(detail, "LoadError=") {
+		detail = strings.TrimPrefix(detail, "LoadError=")
+	}
+	if detail != "" && detail != "(null)" {
+		return ": " + detail
+	}
+	return ""
+}
+
 
 // uidForUser looks up a username and returns its uid string. Wraps
 // user.Lookup so callers don't repeat the lookup that buildSystemctlCommand
@@ -410,17 +509,17 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 		}
 	}
 
-	// daemon-reload: for user scope under sudo we fire it twice with a
-	// short gap. The first reload primes the manager's queue; the second
-	// (after the readiness probe confirmed it's serving) is the one that
-	// reliably picks up newly-written unit files. Single-reload empirically
-	// races on Aliyun ECS with systemd 245+. The non-sudo path keeps a
-	// single reload — no race window there.
-	reloadCount := 1
+	// daemon-reload + unit-load verification. For user scope under sudo
+	// we verify the unit is actually loaded (via LoadState) to catch the
+	// race where daemon-reload returns exit 0 but the unit was never
+	// scanned (e.g. merged into coldplug on systemd 245+). The non-sudo
+	// path keeps a single reload -- no race window there.
 	if isUserUnderSudo {
-		reloadCount = 2
-	}
-	for i := 0; i < reloadCount; i++ {
+		sudoUser := os.Getenv("SUDO_USER")
+		if err := waitForUnitLoaded(s.runner(), opts.Scope, 0, sudoUser, serviceName, 15*time.Second); err != nil {
+			return err
+		}
+	} else {
 		cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "daemon-reload")
 		if err != nil {
 			return err
@@ -428,9 +527,6 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 		action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
 		if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
 			return wrapRunnerErr(action, out, err)
-		}
-		if i+1 < reloadCount {
-			time.Sleep(300 * time.Millisecond)
 		}
 	}
 
