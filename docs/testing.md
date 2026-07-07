@@ -2,10 +2,6 @@
 
 This document describes the testing strategy, organization, and best practices for cc-modelrouter.
 
-**Test Plan Documents:**
-- [Unit Tests Plan](../../plans/unit-tests.md) - Comprehensive unit testing strategy
-- [Integration Test Plans](../../plans/2025-02-24-integration-test-plans.md) - End-to-end testing strategy
-
 ---
 
 ## Running Tests
@@ -670,15 +666,4 @@ Tests are run automatically on:
 
 ## Test Documentation
 
-For detailed test planning and testing strategies, refer to:
-
-- **[Unit Tests Plan](../../plans/unit-tests.md)** - Comprehensive unit testing strategy with full test case coverage
-- **[Integration Test Plans](../../plans/2025-02-24-integration-test-plans.md)** - End-to-end testing strategy
-
-These documents provide:
-- Detailed test scenarios for each package
-- Test coverage goals and gaps
-- Step-by-step test implementation guides
-- Mock and fixture examples
-- Integration test setup instructions
-- Test case completion status tracking
+Test plans are tracked alongside implementation plans in `plans/`.
