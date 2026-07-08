@@ -590,10 +590,27 @@ func uidForUser(name string) (string, error) {
 // enableLinger runs `loginctl enable-linger <user>` so the user's
 // user-systemd instance starts at boot and survives logout. Without
 // this, a user-scope service installed over SSH stops when the session
-// ends. Best-effort: failure is logged but not fatal because some
-// minimal containers lack a polkit/loginctl setup that permits it.
+// ends — and on reboot, never starts. Best-effort: failure is logged
+// but not fatal because some minimal containers lack a polkit/loginctl
+// setup that permits it.
+//
+// When the process isn't root, escalate via sudo (polkit may also work
+// on some systems, but sudo is more universally available). Uses the
+// same -n-then-interactive retry pattern as writeFileWithMode so a
+// passwordless-sudo box completes without a prompt, while an interactive
+// shell still gets a sudo prompt.
 func (s SystemdInstaller) enableLinger(username string) error {
-	out, err := s.runner()("loginctl", "enable-linger", username)
+	args := []string{"enable-linger", username}
+	var out []byte
+	var err error
+	if os.Geteuid() == 0 {
+		out, err = s.runner()("loginctl", args...)
+	} else {
+		out, err = s.runner()("sudo", append([]string{"-n", "loginctl"}, args...)...)
+		if err != nil {
+			out, err = s.runner()("sudo", append([]string{"loginctl"}, args...)...)
+		}
+	}
 	if err != nil {
 		return wrapRunnerErr(fmt.Sprintf("loginctl enable-linger %s", username), out, err)
 	}
@@ -609,15 +626,37 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 	const serviceName = "ccrouter"
 
 	isUserUnderSudo := systemctlUserUnderSudo(opts.Scope)
+
+	// Enable linger for every user-scope install so the service survives
+	// reboot. Without linger, the user-systemd instance only runs during
+	// an active login session — the service dies at logout and never
+	// starts on boot. Best-effort: warn but continue if it fails — the
+	// service still runs for the current session, and the warning
+	// surfaces the remediation command for the operator.
+	if opts.Scope == ScopeUser {
+		lingerUser := ""
+		if isUserUnderSudo {
+			lingerUser = os.Getenv("SUDO_USER")
+		}
+		if lingerUser == "" {
+			if u, err := user.Current(); err == nil && u.Username != "" {
+				lingerUser = u.Username
+			}
+		}
+		if lingerUser != "" {
+			if err := s.enableLinger(lingerUser); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: %v (service runs this session but won't survive reboot)\n", err)
+			}
+		}
+	}
+
 	if isUserUnderSudo {
 		sudoUser := os.Getenv("SUDO_USER")
-		// Linger must come first so the user manager is up before we
-		// reload it. Best-effort: warn but continue if it fails — most
-		// production servers already have linger on, and a missing
-		// polkit/loginctl shouldn't block the install.
-		if err := s.enableLinger(sudoUser); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
-		}
+		// Readiness probe stays here — only under sudo does enable-linger
+		// spawn a fresh user-systemd that we need to wait for. Non-sudo
+		// user-scope runs against the already-running session user-systemd
+		// (the SSH session started it).
+		//
 		// enable-linger returns immediately but the user manager starts
 		// asynchronously. Probe is-system-running until the manager
 		// actually answers (not just until the socket appears — a freshly

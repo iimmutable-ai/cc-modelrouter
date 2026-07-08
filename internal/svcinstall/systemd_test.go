@@ -613,13 +613,27 @@ func TestBuildSystemctlCommand_UserScopeUnderSudoNonNumericUid(t *testing.T) {
 // the test stays green either way because the recording runner accepts
 // either key.
 func TestEnable_UserScope_Sequence(t *testing.T) {
+	// On a non-root test box, Enable fires linger via sudo (escalation
+	// path). Resolve the actual username so the recording runner keys
+	// match. On root CI the linger path takes the plain loginctl branch.
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+	lingerKey := "loginctl enable-linger " + current.Username
+	if os.Geteuid() != 0 {
+		lingerKey = "sudo -n loginctl enable-linger " + current.Username
+	}
 	runner := &recordingRunner{
 		outputs: map[string]cannedResponse{
 			"systemctl --user daemon-reload":                                                                          {[]byte("ok\n"), nil},
 			"systemctl --user enable --now ccrouter":                                                                  {[]byte("ok\n"), nil},
 			"systemctl daemon-reload":                                                                                 {[]byte("ok\n"), nil},
 			"systemctl enable --now ccrouter":                                                                         {[]byte("ok\n"), nil},
+			lingerKey:                                                                                                 {[]byte("ok\n"), nil},
 			"loginctl enable-linger admin":                                                                            {[]byte("ok\n"), nil},
+			"sudo -n loginctl enable-linger admin":                                                                    {[]byte("ok\n"), nil},
+			"sudo loginctl enable-linger admin":                                                                       {[]byte("ok\n"), nil},
 			"runuser -u admin -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user daemon-reload":           {[]byte("ok\n"), nil},
 			"runuser -u admin -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user enable --now ccrouter":   {[]byte("ok\n"), nil},
 		},
@@ -645,6 +659,94 @@ func TestEnable_UserScope_Sequence(t *testing.T) {
 	}
 	if reloadIdx >= enableIdx {
 		t.Errorf("daemon-reload (call %d) must precede enable --now (call %d); calls=%v", reloadIdx, enableIdx, runner.calls)
+	}
+
+	// Linger must fire before daemon-reload too (it spawns the user
+	// manager under sudo; daemon-reload against a not-yet-up manager
+	// is the race the readiness probe exists to prevent).
+	var lingerIdx int = -1
+	for i, c := range runner.calls {
+		if strings.Contains(c, "enable-linger") && lingerIdx == -1 {
+			lingerIdx = i
+		}
+	}
+	if lingerIdx < 0 {
+		t.Fatalf("missing enable-linger in calls: %v", runner.calls)
+	}
+	if lingerIdx >= reloadIdx {
+		t.Errorf("enable-linger (call %d) must precede daemon-reload (call %d); calls=%v", lingerIdx, reloadIdx, runner.calls)
+	}
+}
+
+// TestEnableLinger_NonRootEscalatesViaSudo verifies the sudo escalation
+// path added for user-scope installs run without bare sudo: when euid
+// != 0, enableLinger invokes `sudo -n loginctl enable-linger <user>` so
+// the service survives reboot. Skipped on root CI runs since the sudo
+// branch is only taken when euid != 0.
+func TestEnableLinger_NonRootEscalatesViaSudo(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires non-root euid to exercise sudo escalation path")
+	}
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"sudo -n loginctl enable-linger alice": {[]byte("ok\n"), nil},
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+	if err := s.enableLinger("alice"); err != nil {
+		t.Fatalf("enableLinger: %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "sudo -n loginctl enable-linger alice" {
+		t.Errorf("expected single `sudo -n loginctl enable-linger alice`; got %v", runner.calls)
+	}
+}
+
+// TestEnableLinger_NonRootFallsBackToInteractive verifies the -n →
+// interactive retry: when passwordless sudo fails (needs a password),
+// the function retries without -n so the operator can be prompted.
+func TestEnableLinger_NonRootFallsBackToInteractive(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires non-root euid to exercise sudo escalation path")
+	}
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"sudo -n loginctl enable-linger alice": {nil, errors.New("exit status 1")},
+			"sudo loginctl enable-linger alice":    {[]byte("ok\n"), nil},
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+	if err := s.enableLinger("alice"); err != nil {
+		t.Fatalf("enableLinger: %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected 2 calls (-n then interactive); got %d: %v", len(runner.calls), runner.calls)
+	}
+	if runner.calls[0] != "sudo -n loginctl enable-linger alice" {
+		t.Errorf("first call must be -n; got %q", runner.calls[0])
+	}
+	if runner.calls[1] != "sudo loginctl enable-linger alice" {
+		t.Errorf("second call must be interactive; got %q", runner.calls[1])
+	}
+}
+
+// TestEnableLinger_RootUsesLoginctlDirectly verifies that when running
+// as root (e.g. bare sudo wrapping the whole setup, or a root login),
+// enableLinger calls loginctl directly without sudo wrapping.
+func TestEnableLinger_RootUsesLoginctlDirectly(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to exercise the direct-loginctl path")
+	}
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"loginctl enable-linger alice": {[]byte("ok\n"), nil},
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+	if err := s.enableLinger("alice"); err != nil {
+		t.Fatalf("enableLinger: %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "loginctl enable-linger alice" {
+		t.Errorf("expected single `loginctl enable-linger alice`; got %v", runner.calls)
 	}
 }
 
