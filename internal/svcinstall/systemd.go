@@ -136,26 +136,40 @@ func unitPathFor(scope Scope) (string, error) {
 }
 
 // writeFileWithMode writes content to path with the given mode, creating
-// parent directories as needed. On permission error, falls back to sudo
-// (mkdir + tee + chmod) so the caller doesn't need to pre-escalate.
+// parent directories as needed. On any permission error — whether from
+// MkdirAll (parent root-owned) or WriteFile (existing root-owned file) —
+// falls back to sudo (mkdir + tee + chmod, plus best-effort chown back to
+// the invoking user so we don't leave root-owned files in their home).
 // May trigger an interactive sudo prompt; call only from a terminal context.
 func writeFileWithMode(path, content string, mode os.FileMode) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create dir for %s: %w", path, err)
-	}
-	writeErr := os.WriteFile(path, []byte(content), mode)
-	if writeErr == nil {
-		return nil
-	}
-	if !os.IsPermission(writeErr) {
-		return fmt.Errorf("write %s: %w", path, writeErr)
+
+	// Phase 1: try direct mkdir + write. We need to distinguish "permission
+	// error" (escalate) from "other error" (surface immediately) for both
+	// calls, so the boolean flow control below is deliberate.
+	mkdirErr := os.MkdirAll(dir, 0755)
+	if mkdirErr != nil && !os.IsPermission(mkdirErr) {
+		return fmt.Errorf("create dir for %s: %w", path, mkdirErr)
 	}
 
-	// Permission denied — fall back to sudo. Try non-interactive first
-	// (fails immediately if a password is needed), then retry with
-	// interactive sudo so the user can enter a password at the prompt.
-	if _, sudoErr := exec.LookPath("sudo"); sudoErr != nil {
+	var writeErr error
+	if mkdirErr == nil {
+		writeErr = os.WriteFile(path, []byte(content), mode)
+		if writeErr == nil {
+			return nil
+		}
+		if !os.IsPermission(writeErr) {
+			return fmt.Errorf("write %s: %w", path, writeErr)
+		}
+	}
+
+	// Phase 2: either mkdir or write hit EACCES — escalate via sudo. Try
+	// non-interactive first (fails immediately if a password is needed),
+	// then retry with interactive sudo so the user can enter a password.
+	if _, err := exec.LookPath("sudo"); err != nil {
+		if mkdirErr != nil {
+			return fmt.Errorf("create dir for %s: %w — re-run with sudo", path, mkdirErr)
+		}
 		return fmt.Errorf("write %s: %w — re-run with sudo", path, writeErr)
 	}
 
@@ -177,7 +191,37 @@ func writeFileWithMode(path, content string, mode os.FileMode) error {
 	if err := sudoWriteTee(path, content); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	return sudoWrite("chmod", fmt.Sprintf("%04o", mode), path)
+	if err := sudoWrite("chmod", fmt.Sprintf("%04o", mode), path); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+
+	// Phase 3: best-effort ownership fix-up. When sudo created the dir/file,
+	// it ended up root-owned even though it lives in the invoking user's home.
+	// A prior sudo install leaving ~/.config/systemd/ root-owned is exactly
+	// what blocked later non-sudo installs; restoring ownership breaks that
+	// loop. Skipped when SUDO_USER is unset — os.WriteFile already wrote as
+	// the invoking user, so there's nothing to fix.
+	if owner := targetFileOwner(); owner != "" {
+		_ = sudoWrite("chown", "-R", owner, dir)
+	}
+	return nil
+}
+
+// targetFileOwner returns the "uid:gid" string suitable for `chown`, or
+// empty string if no ownership fix-up is needed. We only chown when running
+// under bare sudo (SUDO_USER set): in that case the sudo-created files in
+// the invoking user's home should be owned by that user, not root. When
+// SUDO_USER is unset, the file is already owned by the invoking user.
+func targetFileOwner() string {
+	name := os.Getenv("SUDO_USER")
+	if name == "" {
+		return ""
+	}
+	u, err := user.Lookup(name)
+	if err != nil {
+		return ""
+	}
+	return u.Uid + ":" + u.Gid
 }
 
 // sudoWriteTee pipes content to `sudo tee <path>`, trying -n first then
