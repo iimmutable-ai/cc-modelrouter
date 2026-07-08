@@ -199,29 +199,55 @@ func writeFileWithMode(path, content string, mode os.FileMode) error {
 	// it ended up root-owned even though it lives in the invoking user's home.
 	// A prior sudo install leaving ~/.config/systemd/ root-owned is exactly
 	// what blocked later non-sudo installs; restoring ownership breaks that
-	// loop. Skipped when SUDO_USER is unset — os.WriteFile already wrote as
-	// the invoking user, so there's nothing to fix.
-	if owner := targetFileOwner(); owner != "" {
+	// loop. chownTargetFor returns empty when the path isn't under the
+	// invoking user's home (e.g. /etc/systemd/system for ScopeSystem), so
+	// system-scope installs are left alone.
+	if owner := chownTargetFor(dir); owner != "" {
 		_ = sudoWrite("chown", "-R", owner, dir)
 	}
 	return nil
 }
 
-// targetFileOwner returns the "uid:gid" string suitable for `chown`, or
-// empty string if no ownership fix-up is needed. We only chown when running
-// under bare sudo (SUDO_USER set): in that case the sudo-created files in
-// the invoking user's home should be owned by that user, not root. When
-// SUDO_USER is unset, the file is already owned by the invoking user.
-func targetFileOwner() string {
-	name := os.Getenv("SUDO_USER")
-	if name == "" {
+// chownTargetFor returns the "uid:gid" string to chown back to, or empty
+// string if no chown is needed or safe. Called from writeFileWithMode
+// Phase 3 after sudo escalation writes a file into the invoking user's
+// home — we want to restore ownership so a prior root-owned state doesn't
+// block future non-sudo installs (the v0.2.10 → v0.2.11 bug).
+//
+// Returns the chown target when:
+//   - SUDO_USER is set (bare sudo wraps the whole process), OR
+//   - the current OS user is non-root (covers nested-sudo: writeFileWithMode
+//     escalated internally without SUDO_USER set on the parent process), AND
+//   - dir is under the resolved user's home directory.
+//
+// The home-dir guard is load-bearing. Without it, a ScopeSystem install
+// where writeFileWithMode escalates via nested sudo would chown
+// /etc/systemd/system to the invoking user — a security disaster that
+// would make every system unit user-writable.
+func chownTargetFor(dir string) string {
+	var uid, gid, home string
+	if name := os.Getenv("SUDO_USER"); name != "" {
+		if u, err := user.Lookup(name); err == nil {
+			uid, gid, home = u.Uid, u.Gid, u.HomeDir
+		}
+	}
+	if uid == "" {
+		if u, err := user.Current(); err == nil && u.Uid != "0" {
+			uid, gid, home = u.Uid, u.Gid, u.HomeDir
+		}
+	}
+	if uid == "" || home == "" {
 		return ""
 	}
-	u, err := user.Lookup(name)
-	if err != nil {
+	// Guard: only chown if dir is under the target user's home. Rejects
+	// /etc/systemd/system, /usr/local/bin, etc. filepath.Rel cleans ".."
+	// and any leading slashes, so a dir outside home produces either a
+	// ".."-prefixed rel path or an error.
+	rel, err := filepath.Rel(home, dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return ""
 	}
-	return u.Uid + ":" + u.Gid
+	return uid + ":" + gid
 }
 
 // sudoWriteTee pipes content to `sudo tee <path>`, trying -n first then

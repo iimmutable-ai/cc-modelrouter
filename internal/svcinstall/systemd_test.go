@@ -312,6 +312,113 @@ func TestWriteFileWithMode_SudoNotFound_ReturnsHint(t *testing.T) {
 	}
 }
 
+// TestChownTargetFor_FallsBackToCurrentUser verifies the v0.2.11 follow-up
+// fix: when SUDO_USER is unset (the nested-sudo case — writeFileWithMode
+// escalated internally without a wrapping sudo), chownTargetFor falls back
+// to the current OS user so files written into the invoking user's home
+// via sudo tee still get chowned back to that user.
+func TestChownTargetFor_FallsBackToCurrentUser(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+	if current.Uid == "0" {
+		t.Skip("running as root — fallback path is intentionally disabled for root")
+	}
+
+	t.Setenv("SUDO_USER", "")
+
+	dir := filepath.Join(current.HomeDir, ".config", "systemd", "user")
+	got := chownTargetFor(dir)
+	want := current.Uid + ":" + current.Gid
+	if got != want {
+		t.Errorf("chownTargetFor(%q) = %q; want %q", dir, got, want)
+	}
+}
+
+// TestChownTargetFor_PrefersSudoUser verifies that when SUDO_USER is set
+// (bare sudo wraps the whole process), that user wins over user.Current().
+func TestChownTargetFor_PrefersSudoUser(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+
+	t.Setenv("SUDO_USER", current.Username)
+	dir := filepath.Join(current.HomeDir, ".config", "systemd", "user")
+	got := chownTargetFor(dir)
+	want := current.Uid + ":" + current.Gid
+	if got != want {
+		t.Errorf("chownTargetFor(%q) = %q; want %q", dir, got, want)
+	}
+}
+
+// TestChownTargetFor_RejectsSystemPath is the critical regression test.
+// The original v0.2.11 fix would have called `sudo chown -R <user> /etc/systemd/system`
+// on a ScopeSystem install — making every system unit user-writable. The
+// home-dir guard must reject any path not under the resolved user's home,
+// regardless of who the current user is or whether SUDO_USER is set.
+func TestChownTargetFor_RejectsSystemPath(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+
+	// Run both with and without SUDO_USER set; the guard must hold either way.
+	for _, sudoUser := range []string{"", current.Username} {
+		t.Setenv("SUDO_USER", sudoUser)
+		got := chownTargetFor("/etc/systemd/system")
+		if got != "" {
+			t.Errorf("chownTargetFor(/etc/systemd/system) with SUDO_USER=%q = %q; want \"\" (system path must never be chowned to a user)",
+				sudoUser, got)
+		}
+	}
+}
+
+// TestChownTargetFor_RejectsRandomTmpPath verifies that a path outside any
+// real user's home (e.g. the test's tmpdir under /tmp or /var/folders) is
+// rejected — we don't want to chown arbitrary filesystem locations just
+// because sudo escalation happened to fire there.
+func TestChownTargetFor_RejectsRandomTmpPath(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+
+	t.Setenv("SUDO_USER", "")
+	tmp := t.TempDir()
+	// Defensive: if the test runner's tmpdir happens to live under the
+	// current user's home (some CI setups), skip — the assertion only
+	// holds when tmp is genuinely outside home.
+	if strings.HasPrefix(tmp, current.HomeDir+string(filepath.Separator)) {
+		t.Skipf("tmp %s is under home %s; cannot verify the out-of-home guard", tmp, current.HomeDir)
+	}
+	if got := chownTargetFor(tmp); got != "" {
+		t.Errorf("chownTargetFor(%q) = %q; want \"\" (path outside any home must be rejected)", tmp, got)
+	}
+}
+
+// TestChownTargetFor_RootProcessReturnsEmpty verifies that a process
+// running as root with no SUDO_USER (i.e. real root login, not sudo)
+// returns empty — there's nobody to chown back to, and any chown target
+// would be nonsensical. Skipped on non-root CI since the path only fires
+// for euid 0.
+func TestChownTargetFor_RootProcessReturnsEmpty(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current: %v", err)
+	}
+	if current.Uid != "0" {
+		t.Skip("requires euid 0; covered manually by running tests under root login")
+	}
+
+	t.Setenv("SUDO_USER", "")
+	dir := filepath.Join(current.HomeDir, ".config", "systemd", "user")
+	if got := chownTargetFor(dir); got != "" {
+		t.Errorf("chownTargetFor(%q) under root with no SUDO_USER = %q; want \"\"", dir, got)
+	}
+}
+
 func TestInstall_SystemScope_RendersUnit(t *testing.T) {
 	// Exercise renderUnit + writeFileWithMode end-to-end against a tmp
 	// path. We can't easily redirect /etc/systemd/system from a test, so
