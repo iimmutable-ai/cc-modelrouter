@@ -121,8 +121,10 @@ func (s *ShellConfig) RemoveFromShellConfig(providerName string) error {
 }
 
 // SyncAllShellExports removes ALL ccrouter entries from the RC file, then
-// re-adds entries for the given apiKeys map (provider name → real API key value).
-// This ensures the RC file is fully reconciled with the current config.
+// appends a single source line that loads ~/.cc-modelrouter/shell_env.sh.
+// The real API keys live in shell_env.sh (written by WriteEnvFile); the RC
+// file only needs the one source directive, so re-running the wizard keeps
+// the RC stable while shell_env.sh absorbs key changes.
 func (s *ShellConfig) SyncAllShellExports(apiKeys map[string]string) error {
 	existingContent := ""
 	if _, err := os.Stat(s.RCFilePath); err == nil {
@@ -132,23 +134,34 @@ func (s *ShellConfig) SyncAllShellExports(apiKeys map[string]string) error {
 		}
 	}
 
-	// Remove ALL ccrouter comment and export lines
+	// Phase 1: strip every ccrouter-managed line we might have written
+	// previously — per-provider exports, their comments, and the older
+	// single-source form (so the append below is exactly-once).
 	var filtered []string
 	for _, line := range strings.Split(existingContent, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "# ccrouter - ") || strings.HasPrefix(trimmed, "export CCROUTER_") {
+		switch {
+		case strings.HasPrefix(trimmed, "# ccrouter - "):
+			continue
+		case strings.HasPrefix(trimmed, "export CCROUTER_"):
+			continue
+		case trimmed == "# ccrouter-env (auto-source API keys — managed by ccrouter config)":
+			continue
+		case strings.HasPrefix(trimmed, "[ -f ") && strings.Contains(trimmed, "shell_env.sh ]"):
 			continue
 		}
 		filtered = append(filtered, line)
 	}
 
-	// Append fresh entries for each provider
-	for providerName, apiKey := range apiKeys {
-		if apiKey == "" {
-			continue
-		}
-		filtered = append(filtered, "", GenerateExportLine(providerName, apiKey))
-	}
+	// Phase 2: append a single source directive. shell_env.sh is the
+	// authoritative store written by WriteEnvFile; any provider whose key
+	// is empty gets skipped there, so no filtering is needed here.
+	_ = apiKeys
+	filtered = append(filtered,
+		"",
+		"# ccrouter-env (auto-source API keys — managed by ccrouter config)",
+		`[ -f ~/.cc-modelrouter/shell_env.sh ] && source ~/.cc-modelrouter/shell_env.sh`,
+	)
 
 	result := strings.Join(filtered, "\n")
 	return os.WriteFile(s.RCFilePath, []byte(result), 0644)

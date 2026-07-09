@@ -643,6 +643,9 @@ func TestStripEnvVarPlaceholder(t *testing.T) {
 }
 
 func TestSyncAllShellExports(t *testing.T) {
+	const sentinelLine = "# ccrouter-env (auto-source API keys — managed by ccrouter config)"
+	const sourceLine = `[ -f ~/.cc-modelrouter/shell_env.sh ] && source ~/.cc-modelrouter/shell_env.sh`
+
 	tests := []struct {
 		name            string
 		existingContent string
@@ -651,7 +654,7 @@ func TestSyncAllShellExports(t *testing.T) {
 		wantNotContain  []string
 	}{
 		{
-			name: "full reconciliation removes stale and adds current",
+			name: "full reconciliation strips per-provider exports and adds single source line",
 			existingContent: strings.Join([]string{
 				"export PATH=$HOME/bin:$PATH",
 				"# ccrouter - stale_provider",
@@ -666,28 +669,26 @@ func TestSyncAllShellExports(t *testing.T) {
 			},
 			wantContains: []string{
 				"export PATH=$HOME/bin:$PATH",
-				"# ccrouter - openrouter",
-				`export CCROUTER_OPENROUTER_API_KEY="sk-or-new"`,
-				"# ccrouter - bigmodel",
-				`export CCROUTER_BIGMODEL_API_KEY="bm-real-key"`,
+				sentinelLine,
+				sourceLine,
 			},
 			wantNotContain: []string{
+				"# ccrouter -",
+				"export CCROUTER_",
 				"stale_provider",
 				"STALE_PROVIDER",
 				"old-key",
 				"or-key",
+				"sk-or-new",
+				"bm-real-key",
 			},
 		},
 		{
-			name: "no duplicates after sync",
+			name: "re-running is idempotent — exactly one source block",
 			existingContent: strings.Join([]string{
 				"export PATH=$HOME/bin:$PATH",
-				"# ccrouter - openrouter",
-				`export CCROUTER_OPENROUTER_API_KEY="key1"`,
-				"# ccrouter - openrouter",
-				`export CCROUTER_OPENROUTER_API_KEY="key2"`,
-				"# ccrouter - openrouter",
-				`export CCROUTER_OPENROUTER_API_KEY="key3"`,
+				sentinelLine,
+				sourceLine,
 				"",
 			}, "\n"),
 			apiKeys: map[string]string{
@@ -695,21 +696,30 @@ func TestSyncAllShellExports(t *testing.T) {
 			},
 			wantContains: []string{
 				"export PATH=$HOME/bin:$PATH",
-				"# ccrouter - openrouter",
-				`export CCROUTER_OPENROUTER_API_KEY="sk-or-final"`,
+				sentinelLine,
+				sourceLine,
 			},
 			wantNotContain: []string{
-				"key1",
-				"key2",
-				"key3",
+				"export CCROUTER_",
+				"sk-or-final",
 			},
 		},
 		{
-			name:            "empty apiKeys removes all ccrouter entries",
+			name: "legacy auto-source form is also stripped",
+			existingContent: strings.Join([]string{
+				"export PATH=$HOME/bin:$PATH",
+				`[ -f ~/.cc-modelrouter/shell_env.sh ] && source ~/.cc-modelrouter/shell_env.sh`,
+				"",
+			}, "\n"),
+			apiKeys:      map[string]string{"openrouter": "k"},
+			wantContains: []string{sentinelLine, sourceLine},
+		},
+		{
+			name:            "empty apiKeys still writes the source line (keys resolved at source time)",
 			existingContent: "export PATH=$HOME/bin:$PATH\n# ccrouter - x\nexport CCROUTER_X_API_KEY=\"k\"\n",
 			apiKeys:         map[string]string{},
-			wantContains:    []string{"export PATH=$HOME/bin:$PATH"},
-			wantNotContain:  []string{"ccrouter", "CCROUTER"},
+			wantContains:    []string{sentinelLine, sourceLine},
+			wantNotContain:  []string{"export CCROUTER_", "# ccrouter -"},
 		},
 	}
 
@@ -743,20 +753,11 @@ func TestSyncAllShellExports(t *testing.T) {
 				}
 			}
 
-			// Verify no duplicate comment lines for any provider
-			for providerName := range tt.apiKeys {
-				comment := "# ccrouter - " + providerName
-				count := strings.Count(resultStr, comment)
-				if count != 1 {
-					t.Errorf("expected exactly 1 comment for %s, got %d\n--- got ---\n%s",
-						providerName, count, resultStr)
-				}
-				varName := GenerateEnvVarName(providerName)
-				exportCount := strings.Count(resultStr, "export "+varName+"=")
-				if exportCount != 1 {
-					t.Errorf("expected exactly 1 export for %s, got %d\n--- got ---\n%s",
-						providerName, exportCount, resultStr)
-				}
+			if c := strings.Count(resultStr, sourceLine); c != 1 {
+				t.Errorf("expected exactly 1 source line, got %d\n--- got ---\n%s", c, resultStr)
+			}
+			if c := strings.Count(resultStr, sentinelLine); c != 1 {
+				t.Errorf("expected exactly 1 sentinel comment, got %d\n--- got ---\n%s", c, resultStr)
 			}
 		})
 	}

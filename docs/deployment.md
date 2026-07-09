@@ -132,7 +132,7 @@ PrivateTmp=true
 ReadWritePaths=/home/ccrouter/.cc-modelrouter
 # Where ccrouter lives (adjust if installed elsewhere)
 ExecStart=/usr/local/bin/ccrouter start -H 0.0.0.0 --port 443 --tls-domain=api.example.com
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -152,7 +152,7 @@ sudo journalctl -u ccrouter -f   # tail logs
 - `ReadWritePaths` is limited to `~/.cc-modelrouter` (config, instance metadata, logs, Let's Encrypt cache). `ProtectSystem=strict` makes the rest of the filesystem read-only.
 - Use `--tls-cert`/`--tls-key` instead of `--tls-domain` if you manage certs yourself (e.g. via a separate `certbot renew` systemd timer).
 - To keep TLS settings in a config file instead of CLI flags, write them to `~/.cc-modelrouter/config.json` (`server.tls.{domain, certFile, keyFile, redirect}`) and change `ExecStart` to plain `ccrouter start`.
-- `ccrouter start` has its own auto-restart-on-idle feature (`--auto-restart-idle`) — systemd's `Restart=on-failure` is for crash-recovery. The two are independent and complementary.
+- `ccrouter start` has its own auto-restart-on-idle feature (`--auto-restart-idle`) — systemd's `Restart=always` covers crash-recovery AND clean-exit relaunch. The two are independent and complementary.
 
 ### Alibaba Cloud SAS checklist
 

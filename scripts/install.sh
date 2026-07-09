@@ -26,6 +26,63 @@ github_url() {
     fi
 }
 
+# maybe_export_path ensures BINDIR is on PATH for future shells by appending a
+# sentinel-gated export line to the appropriate rc file. No-op if BINDIR is
+# already on PATH. When running under sudo, targets the invoking user's rc,
+# not root's.
+maybe_export_path() {
+    local bindir="$1"
+
+    case ":${PATH:-}:" in
+        *":${bindir}:"*) return 0 ;;
+    esac
+
+    local target_home="${HOME}"
+    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "${USER:-}" ]]; then
+        local got
+        if got=$(getent passwd "${SUDO_USER}" 2>/dev/null | cut -d: -f6); then
+            target_home="${got}"
+        fi
+    fi
+
+    local shell="${SHELL:-}"
+    local rcfile=""
+    if [[ "$shell" == */bash ]]; then
+        rcfile="${target_home}/.bashrc"
+    elif [[ "$shell" == */zsh ]]; then
+        local zd="${ZDOTDIR:-}"
+        rcfile="${zd:-${target_home}}/.zshrc"
+    else
+        rcfile="${target_home}/.profile"
+    fi
+
+    if [[ ! -f "$rcfile" ]]; then
+        touch "$rcfile" 2>/dev/null || return 0
+        chmod 600 "$rcfile" 2>/dev/null || true
+    fi
+    [[ -r "$rcfile" && -w "$rcfile" ]] || return 0
+
+    grep -qF '# ccrouter-path' "$rcfile" 2>/dev/null && return 0
+
+    local needs_leading_newline=0
+    if [[ -s "$rcfile" ]]; then
+        local last_byte
+        last_byte=$(tail -c1 "$rcfile" 2>/dev/null | od -An -c | tr -d ' ')
+        if [[ -n "$last_byte" && "$last_byte" != "\\n" ]]; then
+            needs_leading_newline=1
+        fi
+    fi
+
+    {
+        (( needs_leading_newline )) && printf '\n'
+        printf '\n# ccrouter-path (added by installer)\n'
+        printf 'export PATH="%s:$PATH"\n' "$bindir"
+    } >> "$rcfile"
+
+    echo "✓ Added ${bindir} to PATH in ${rcfile}"
+    echo "  Open a new shell or run: source ${rcfile}"
+}
+
 REPO_OWNER="iimmutable-ai"
 REPO_NAME="cc-modelrouter"
 BINARY_NAME="ccrouter"
@@ -163,6 +220,8 @@ if [[ "$USE_SUDO" -eq 1 ]]; then
 else
     mv "$BINARY_SRC" "${BINDIR}/${BINARY_NAME}"
 fi
+
+maybe_export_path "$BINDIR"
 
 echo ""
 echo "✓ ${BINARY_NAME} installed to ${BINDIR}/${BINARY_NAME}"
