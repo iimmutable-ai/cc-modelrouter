@@ -323,7 +323,15 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 		os.Getenv("SUDO_USER"), os.Getenv("SUDO_UID"), os.Getenv("HOME"), homeDir)
 	dataDir := filepath.Join(homeDir, ".cc-modelrouter")
 	shellEnvPath := filepath.Join(dataDir, "shell_env.sh")
-	serviceEnvPath := "/etc/cc-modelrouter/service.env"
+	// systemd's EnvironmentFile= parser does not accept the `export FOO="bar"`
+	// format that shell_env.sh uses — it only accepts raw KEY=value. Write a
+	// parallel file in the correct format so the unit gets real API key
+	// values without breaking shell_env.sh's sourceable form (existing
+	// .bashrc/.zshrc integrations depend on it).
+	serviceEnvPath := filepath.Join(dataDir, "service.env")
+	if ans.Scope == svcinstall.ScopeSystem {
+		serviceEnvPath = "/etc/cc-modelrouter/service.env"
+	}
 
 	if !strings.HasPrefix(configPath, homeDir) {
 		logging.Warnf("[SETUP] path inconsistency: configPath=%s EffectiveHomeDir=%s shellEnvPath=%s",
@@ -339,10 +347,7 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 	}
 	binPath, _ = filepath.EvalSymlinks(binPath)
 
-	envFileForUnit := shellEnvPath
-	if ans.Scope == svcinstall.ScopeSystem {
-		envFileForUnit = serviceEnvPath
-	}
+	envFileForUnit := serviceEnvPath
 
 	installer := svcinstall.SystemdInstaller{}
 
@@ -424,12 +429,20 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 		return nil
 	}
 
-	// System-scope needs a root-owned env file the service user can read.
-	if ans.Scope == svcinstall.ScopeSystem {
-		if err := writeServiceEnvFile(serviceEnvPath, ans.APIKeys); err != nil {
-			return fmt.Errorf("write service.env: %w", err)
-		}
+	// Write the systemd-format EnvironmentFile for both scopes. For system
+	// scope this is a root-owned file the ccrouter service user reads; for
+	// user scope it lives in the invoking user's home alongside shell_env.sh.
+	// Without this, the unit's EnvironmentFile= directive would point at
+	// shell_env.sh, whose `export FOO="bar"` format systemd silently drops —
+	// leaving API key placeholders unexpanded at start.go:313-318 → exit 1.
+	if err := writeEnvFileForSystemd(serviceEnvPath, ans.APIKeys, ans.Scope); err != nil {
+		return fmt.Errorf("write service.env: %w", err)
+	}
+	switch ans.Scope {
+	case svcinstall.ScopeSystem:
 		fmt.Printf("✓ Service env file:  %s (root:ccrouter 0640)\n", serviceEnvPath)
+	case svcinstall.ScopeUser:
+		fmt.Printf("✓ Service env file:  %s (mode 0600)\n", serviceEnvPath)
 	}
 
 	if warnAboutBinaryLocation(binPath) {
@@ -567,18 +580,40 @@ func sortedProviderNames(m map[string]config.ProviderConfig) []string {
 	return names
 }
 
-// writeServiceEnvFile writes /etc/cc-modelrouter/service.env with mode
-// 0640 owned by root:ccrouter. Done via sudo tee because the cli process
-// is usually not root. Content is piped through stdin so the key never
-// appears in process argv / shell history.
-func writeServiceEnvFile(path string, apiKeys map[string]string) error {
+// writeEnvFileForSystemd writes an env file in systemd's EnvironmentFile=
+// format (raw KEY=value, no export prefix, no shell quotes). Used for both
+// system scope (/etc/cc-modelrouter/service.env, root:ccrouter 0640 via sudo)
+// and user scope (~/.cc-modelrouter/service.env, owned by the invoking user,
+// 0600). shell_env.sh stays shell-sourceable for interactive shells; this
+// file is what the unit's EnvironmentFile= directive reads because systemd
+// does not run a shell and silently drops lines that don't match KEY=value.
+func writeEnvFileForSystemd(path string, apiKeys map[string]string, scope svcinstall.Scope) error {
 	var lines []string
 	for name, key := range apiKeys {
+		if key == "" {
+			continue
+		}
 		envVar := configwizard.GenerateEnvVarName(name)
 		lines = append(lines, fmt.Sprintf("%s=%s", envVar, key))
 	}
 	content := strings.Join(lines, "\n") + "\n"
 
+	if scope == svcinstall.ScopeUser {
+		// Inside the invoking user's home — write directly. Mode 0600: the
+		// file contains plaintext API keys and lives in a directory that
+		// may be group-readable depending on distro defaults.
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return fmt.Errorf("mkdir for %s: %w", path, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		return nil
+	}
+
+	// System scope: write via sudo tee (file is root-owned, group ccrouter).
+	// Content is piped through stdin so the key never appears in process
+	// argv / shell history.
 	if out, err := exec.Command("sudo", "mkdir", "-p", filepath.Dir(path)).CombinedOutput(); err != nil {
 		return fmt.Errorf("sudo mkdir: %w (%s)", err, string(out))
 	}
