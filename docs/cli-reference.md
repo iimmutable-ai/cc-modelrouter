@@ -804,9 +804,11 @@ A non-TUI, sequential Q&A installer (not the Bubble Tea wizard) for bringing up 
 
 Then writes:
 - `~/.cc-modelrouter/config.json` — config with `${CCROUTER_<NAME>_API_KEY}` placeholders (no real keys on disk).
-- `~/.cc-modelrouter/shell_env.sh` (mode 0600) — real keys, sourceable from the admin shell.
+- `~/.cc-modelrouter/shell_env.sh` (mode 0600) — real keys, sourceable from the admin shell. Each export is preceded by a `# provider: <name>` comment so mixed-case custom provider names (e.g. `bigmodelKNDY`) round-trip exactly when the file is re-read by a subsequent setup run.
 - For system-level installs only: `/etc/cc-modelrouter/service.env` (root:ccrouter, mode 0640) so the unprivileged service user can read the keys.
 - A systemd unit (`/etc/systemd/system/ccrouter.service` system-level, or `~/.config/systemd/user/ccrouter.service` user-level), then `daemon-reload` + `enable --now`. For a system-level install driven by a non-root user, `daemon-reload` and `enable --now` are automatically wrapped in `sudo -n` (then interactive `sudo` as fallback) — no separate `sudo ccrouter setup server` invocation required.
+
+After `enable --now`, setup runs a 12-second **active-state verification**: `systemctl is-active ccrouter` must report `active` continuously for 3s AND `systemctl show -p NRestarts --value` must stay `0`. If the service crashes during that hold (e.g. ExecStart exits 1, config unreadable, doubled-path EACCES), setup prints the last 30 journalctl lines + `systemctl status` and exits non-zero — no false-positive "Service is active" if it's actually restart-looping. Common failure diagnostics appear inline in the error message.
 
 If the running binary is in `$HOME` or `/tmp`, offers to `cp` it to `/usr/local/bin/ccrouter` before installing the unit. Auto-restart defaults are idle=1h and backoff-max=5m, applied only when the existing config doesn't already set them — user-tuned restart windows survive re-install.
 

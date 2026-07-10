@@ -80,6 +80,9 @@ go test -v ./test/security
 ~/.cc-modelrouter/restarts.jsonl       # Auto-restart outcome log (append-only)
 ```
 
+**Systemd service paths:** The system-scope unit sets `Environment=HOME=<DataDir>` and `Environment=CCROUTER_DATA_DIR=<DataDir>` (the latter is the authoritative source). All runtime subsystems route through `config.DataDir()` which prefers `$CCROUTER_DATA_DIR`, falling back to `$HOME/.cc-modelrouter`. When debugging the service, read paths from `$CCROUTER_DATA_DIR`, not from raw `os.UserHomeDir() + "/.cc-modelrouter"` — and when adding a new subsystem, call `config.DataDir()` instead of hand-rolling the path.
+
+
 ---
 
 ## 📐 Architecture Quick Reference

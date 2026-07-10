@@ -263,6 +263,14 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/home/ccrouter/.cc-modelrouter
+# Pin HOME and CCROUTER_DATA_DIR explicitly — ProtectHome=true repoints
+# $HOME under the service user, and without CCROUTER_DATA_DIR the start
+# command would derive it from $HOME and risk a doubled path
+# (/home/ccrouter/.cc-modelrouter/.cc-modelrouter/...). Setting both
+# keeps all runtime files (usage.db, logs/, instances/, master.key,
+# autocert cache) inside ReadWritePaths.
+Environment=HOME=/home/ccrouter/.cc-modelrouter
+Environment=CCROUTER_DATA_DIR=/home/ccrouter/.cc-modelrouter
 # Where ccrouter lives (adjust if installed elsewhere)
 ExecStart=/usr/local/bin/ccrouter start -H 0.0.0.0 --port 443 --tls-domain=api.example.com
 Restart=always
@@ -273,7 +281,13 @@ WantedBy=multi-user.target
 UNIT
 
 sudo useradd --system --create-home --home-dir /home/ccrouter --shell /usr/sbin/nologin ccrouter
+sudo mkdir -p /home/ccrouter/.cc-modelrouter
 sudo chown -R ccrouter:ccrouter /home/ccrouter
+# Data dir must be group-writable (0770) so the service user can write
+# usage.db, logs/, instances/, master.key, and the autocert cache.
+sudo chmod 0770 /home/ccrouter/.cc-modelrouter
+sudo find /home/ccrouter/.cc-modelrouter -mindepth 1 -type d -exec chmod 0770 {} +
+sudo find /home/ccrouter/.cc-modelrouter -mindepth 1 -type f -exec chmod 0660 {} +
 sudo systemctl daemon-reload
 sudo systemctl enable --now ccrouter
 sudo journalctl -u ccrouter -f   # tail logs
