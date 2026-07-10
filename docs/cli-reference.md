@@ -797,18 +797,18 @@ ccrouter setup server [flags]
 A non-TUI, sequential Q&A installer (not the Bubble Tea wizard) for bringing up ccrouter on a public-accessible Linux host (Alibaba Cloud SAS, AWS, DigitalOcean, etc.). Walks through five steps:
 
 1. **Bind address** — host (default `0.0.0.0`) + port (default `8443`).
-2. **HTTPS / TLS** — Let's Encrypt autocert (needs a domain + open `:80`/`:443`), manual cert/key files, or plain HTTP (not recommended for public servers).
-3. **Service install level** — system-level (dedicated `ccrouter` user, sudo required) or user-level (runs as current user).
-4. **Provider API keys** — loop adding providers by name (openrouter, bigmodel, gemini, anthropic, openai, aliyun, minimax, or any custom name). Each key is validated via a 1-token test request before being saved; failures can be retried or kept anyway. If `~/.cc-modelrouter/shell_env.sh` already exists, the wizard detects it here and offers to reuse the existing keys for this install — re-running `setup server` on an already-configured host won't clobber your secrets.
+2. **HTTPS / TLS** — Let's Encrypt autocert (needs a DNS FQDN + open `:80`/`:443`; IP literals and empty input are rejected at the prompt), manual cert/key files, or plain HTTP (not recommended for public servers).
+3. **Service install level** — system-level (dedicated `ccrouter` user, sudo required) or user-level (runs as current user). User-level + autocert is rejected at the prompt: user-scope systemd units lack `CAP_NET_BIND_SERVICE`, so they can't bind `:80` for the ACME http-01 challenge and the service would restart-loop forever.
+4. **Provider API keys** — loop adding providers by name (openrouter, bigmodel, gemini, anthropic, openai, aliyun, minimax, or any custom name). Each key is validated via a 1-token test request before being saved; failures can be retried or kept anyway. For non-preset (custom-named) providers the wizard prompts for a **base URL** (or reuses one already in `config.json`); preset providers inherit their baseURL from the preset. If `~/.cc-modelrouter/shell_env.sh` already exists, the wizard detects it here and offers to reuse the existing keys for this install.
 5. **Review** — print the final config and ask for confirmation before writing anything.
 
 Then writes:
 - `~/.cc-modelrouter/config.json` — config with `${CCROUTER_<NAME>_API_KEY}` placeholders (no real keys on disk).
 - `~/.cc-modelrouter/shell_env.sh` (mode 0600) — real keys, sourceable from the admin shell.
 - For system-level installs only: `/etc/cc-modelrouter/service.env` (root:ccrouter, mode 0640) so the unprivileged service user can read the keys.
-- A systemd unit (`/etc/systemd/system/ccrouter.service` system-level, or `~/.config/systemd/user/ccrouter.service` user-level), then `daemon-reload` + `enable --now`.
+- A systemd unit (`/etc/systemd/system/ccrouter.service` system-level, or `~/.config/systemd/user/ccrouter.service` user-level), then `daemon-reload` + `enable --now`. For a system-level install driven by a non-root user, `daemon-reload` and `enable --now` are automatically wrapped in `sudo -n` (then interactive `sudo` as fallback) — no separate `sudo ccrouter setup server` invocation required.
 
-If the running binary is in `$HOME` or `/tmp`, offers to `cp` it to `/usr/local/bin/ccrouter` before installing the unit. Auto-restart is enabled with idle=1h and backoff-max=5m defaults.
+If the running binary is in `$HOME` or `/tmp`, offers to `cp` it to `/usr/local/bin/ccrouter` before installing the unit. Auto-restart defaults are idle=1h and backoff-max=5m, applied only when the existing config doesn't already set them — user-tuned restart windows survive re-install.
 
 **Secrets handling:**
 
@@ -818,7 +818,7 @@ If the running binary is in `$HOME` or `/tmp`, offers to `cp` it to `/usr/local/
 | Interactive shell env | `~/.cc-modelrouter/shell_env.sh` (0600) | Real keys, sourced by the admin user |
 | Service env (system-scope only) | `/etc/cc-modelrouter/service.env` (0640 root:ccrouter) | Real keys readable by the unprivileged service user |
 
-Real keys are captured with echo disabled (`golang.org/x/term.ReadPassword`), validated before being written, never appear in process argv, and are never logged. Existing config is backed up to `config.json.bak.<timestamp>` before overwrite.
+Real keys are captured with echo disabled (`golang.org/x/term.ReadPassword`), validated before being written, never appear in process argv, and are never logged. By default an existing `config.json` is **merged onto** — provider baseURLs/transformers/models, routes, and auto-restart settings are preserved; only the APIKey placeholder is refreshed and missing fields are filled from presets. A timestamped backup (`config.json.bak.<YYYYMMDD-HHMMSS>`) is still written so you can roll back; choosing "do not merge" at the prompt falls back to the legacy overwrite path.
 
 **Examples:**
 ```bash
