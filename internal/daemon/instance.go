@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // InstanceMetadata represents metadata for a running instance.
@@ -32,11 +34,11 @@ func GenerateInstanceID() string {
 
 // InstancesDir returns the directory for instance files.
 func InstancesDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cc-modelrouter", "instances"), nil
+	return filepath.Join(dataDir, "instances"), nil
 }
 
 // SaveInstance saves instance metadata to disk.

@@ -576,7 +576,7 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 		// cycle surfaces the real failure (config perms, :80 bind, etc.)
 		// and returns non-zero so silent success is impossible.
 		fmt.Println("Verifying service is active...")
-		if verr := installer.VerifyActive(installOpts, 8*time.Second); verr != nil {
+		if verr := installer.VerifyActive(installOpts, 12*time.Second); verr != nil {
 			fmt.Fprintf(os.Stderr, "\n⚠ Service did not reach active state:\n")
 			fmt.Fprintf(os.Stderr, "%v\n\n", verr)
 			fmt.Fprintf(os.Stderr, "Common causes:\n")
@@ -654,16 +654,32 @@ func buildConfig(ans *collectedAnswers, existing *config.Config) *config.Config 
 	// Providers: merge onto existing. Preserved entries keep their
 	// baseURL/transformer/models; we only refresh the APIKey placeholder
 	// (the env var name is deterministic from the provider name).
+	//
+	// Matching is case-insensitive because the shell_env.sh → parseEnvExports
+	// round-trip historically lost case (and legacy files without `# provider:`
+	// comments still do). When a setup answer key matches an existing entry
+	// case-insensitively, we merge into the EXISTING (original-case) key and
+	// delete any lowercased phantom that may have slipped in from a prior
+	// buggy run. This prevents the v0.2.12 regression where `bigmodelKNDY`
+	// (existing, with baseURL) was duplicated by `bigmodelkndy` (lowercased,
+	// no baseURL) and startup failed with "baseURL is required".
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.ProviderConfig{}
 	}
+	existingByLower := map[string]string{}
+	for existingName := range cfg.Providers {
+		existingByLower[strings.ToLower(existingName)] = existingName
+	}
 	for name := range ans.APIKeys {
 		envVar := configwizard.GenerateEnvVarName(name)
-		preset, hasPreset := configwizard.ProviderPresets[name]
-		pc, hadExisting := cfg.Providers[name]
+		preset, hasPreset := configwizard.ProviderPresets[strings.ToLower(name)]
+		targetName, hadExisting := existingByLower[strings.ToLower(name)]
 		if !hadExisting {
-			pc = config.ProviderConfig{}
+			// New entry — use the operator's typed case verbatim so the
+			// stored key reflects what the user entered.
+			targetName = name
 		}
+		pc := cfg.Providers[targetName]
 		pc.APIKey = "${" + envVar + "}"
 		if hasPreset {
 			// Fill in any missing fields from the preset — preserves
@@ -692,7 +708,13 @@ func buildConfig(ans *collectedAnswers, existing *config.Config) *config.Config 
 				pc.Transformer = "anthropic"
 			}
 		}
-		cfg.Providers[name] = pc
+		cfg.Providers[targetName] = pc
+		// If a lowercased phantom entry exists alongside the original
+		// (e.g. left behind by a buggy prior run), remove it so the
+		// config has exactly one canonical entry per provider.
+		if hadExisting && targetName != name {
+			delete(cfg.Providers, name)
+		}
 	}
 
 	// Default route: only synthesize when the existing config has no
@@ -793,8 +815,17 @@ func autocertPort80InfoNote(ans *collectedAnswers) string {
 // warnings but do not abort the install. The operator workflow is
 // preserved — admin remains the owner of every file, so
 // `vim ~/.cc-modelrouter/config.json` still works. ccrouter is added as
-// a group member gaining read access; the only group members are admin
+// a group member gaining read+write access; the only group members are admin
 // (already the owner) and the ccrouter service account.
+//
+// Data-dir mode is 0770 (not 0750) because the ccrouter service user,
+// landed in group `ccrouter`, needs WRITE access to usage.db, logs/,
+// instances/, autocert cache, and master.key — all of which the service
+// creates or updates at runtime. A 0750 would grant only r-x to the
+// group and every write would fail with EACCES, restart-looping the
+// service. The two dedicated chmod steps for config.json (0640) and
+// shell_env.sh (0600) below override the recursive 0660 for those
+// specific files.
 //
 // /home/admin is chmod 0711 (not 0750) so the ccrouter user can traverse
 // into it without being able to list admin's other files.
@@ -815,7 +846,9 @@ func fixSystemScopeOwnership(configPath, dataDir, homeDir, shellEnvPath string) 
 	}
 	steps := []step{
 		{"chown data dir", []string{"chown", "-R", invokingUser + ":" + group, dataDir}},
-		{"chmod data dir", []string{"chmod", "0750", dataDir}},
+		{"chmod data dir", []string{"chmod", "0770", dataDir}},
+		{"chmod data subdirs", []string{"find", dataDir, "-mindepth", "1", "-type", "d", "-exec", "chmod", "0770", "{}", "+"}},
+		{"chmod data files", []string{"find", dataDir, "-mindepth", "1", "-type", "f", "-exec", "chmod", "0660", "{}", "+"}},
 		{"chown config", []string{"chown", invokingUser + ":" + group, configPath}},
 		{"chmod config", []string{"chmod", "0640", configPath}},
 		{"chown shell_env.sh", []string{"chown", invokingUser + ":" + group, shellEnvPath}},

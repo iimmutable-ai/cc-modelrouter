@@ -90,13 +90,19 @@ func TestRenderUnit_CustomUser(t *testing.T) {
 	}
 }
 
-// TestVerifyActive_Active verifies VerifyActive returns nil as soon as
-// `systemctl is-active` reports "active". Uses ScopeUser so needsSudo
-// returns false and the runner keys are predictable.
+// TestVerifyActive_Active verifies VerifyActive returns nil after
+// `systemctl is-active` reports "active" continuously for the full
+// sustained-active hold window with zero restarts. Uses ScopeUser so
+// needsSudo returns false and the runner keys are predictable.
 func TestVerifyActive_Active(t *testing.T) {
+	origHold := verifyActiveHoldSeconds
+	verifyActiveHoldSeconds = 100 * time.Millisecond
+	t.Cleanup(func() { verifyActiveHoldSeconds = origHold })
+
 	runner := &recordingRunner{
 		outputs: map[string]cannedResponse{
 			"systemctl --user is-active ccrouter": {[]byte("active\n"), nil},
+			"systemctl --user show ccrouter -p NRestarts --value": {[]byte("0\n"), nil},
 		},
 	}
 	s := SystemdInstaller{run: runner.run}
@@ -133,6 +139,119 @@ func TestVerifyActive_RestartLoop(t *testing.T) {
 	}
 	if !strings.Contains(body, "status: activating") {
 		t.Errorf("error missing status output; got: %s", body)
+	}
+}
+
+// TestVerifyActive_BriefActiveThenCrash verifies that a service which
+// briefly reports "active" (because systemd sets active the instant
+// ExecStart forks for Type=simple) but then crashes and enters
+// auto-restart is NOT falsely declared healthy. Prior to the fix,
+// VerifyActive returned nil on the first "active" sample, missing
+// crashes that occur within ~2-3s of startup.
+//
+// Scenario: is-active returns "active" for the first 2 polls, then
+// "activating" forever. NRestarts stays "0" (the first crash hasn't
+// been counted yet by the time we bail). The function must return a
+// non-nil error because the service left the active state during the
+// sustained-active hold window.
+func TestVerifyActive_BriefActiveThenCrash(t *testing.T) {
+	origHold := verifyActiveHoldSeconds
+	verifyActiveHoldSeconds = 5 * time.Second
+	t.Cleanup(func() { verifyActiveHoldSeconds = origHold })
+
+	isActiveCalls := 0
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(key, "is-active ccrouter"):
+				isActiveCalls++
+				if isActiveCalls <= 2 {
+					return []byte("active\n"), nil
+				}
+				return []byte("activating\n"), nil
+			case strings.Contains(key, "show") && strings.Contains(key, "NRestarts"):
+				return []byte("0\n"), nil
+			case strings.Contains(key, "status ccrouter"):
+				return []byte("status: activating (auto-restart)\n"), nil
+			case strings.Contains(key, "journalctl"):
+				return []byte("baseURL is required\n"), nil
+			}
+			return []byte{}, nil
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+
+	err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 2*time.Second)
+	if err == nil {
+		t.Fatalf("VerifyActive returned nil for a service that crashed during the sustained-active hold")
+	}
+	if !strings.Contains(err.Error(), "baseURL is required") {
+		t.Errorf("error should include journal output; got: %s", err.Error())
+	}
+}
+
+// TestVerifyActive_RestartLoopDetectedViaNRestarts verifies that even
+// when is-active returns "active" continuously, a non-zero NRestarts
+// count from `systemctl show` triggers an error. This catches tight
+// crash-loops where systemd happens to report "active" on every sample
+// because RestartSec is very short.
+func TestVerifyActive_RestartLoopDetectedViaNRestarts(t *testing.T) {
+	origHold := verifyActiveHoldSeconds
+	verifyActiveHoldSeconds = 10 * time.Second // longer than timeout so NRestarts is the only exit path
+	t.Cleanup(func() { verifyActiveHoldSeconds = origHold })
+
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(key, "is-active ccrouter"):
+				return []byte("active\n"), nil
+			case strings.Contains(key, "show") && strings.Contains(key, "NRestarts"):
+				return []byte("2\n"), nil
+			case strings.Contains(key, "status ccrouter"):
+				return []byte("status: active (running)\n"), nil
+			case strings.Contains(key, "journalctl"):
+				return []byte("restart detected\n"), nil
+			}
+			return []byte{}, nil
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+
+	err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 2*time.Second)
+	if err == nil {
+		t.Fatalf("VerifyActive returned nil despite NRestarts=2 (crash-loop)")
+	}
+	if !strings.Contains(err.Error(), "restart detected") {
+		t.Errorf("error should include journal output; got: %s", err.Error())
+	}
+}
+
+// TestVerifyActive_SustainedActiveNoRestarts verifies the positive
+// case: is-active returns "active" continuously and NRestarts stays
+// "0" throughout the hold window. VerifyActive must return nil.
+func TestVerifyActive_SustainedActiveNoRestarts(t *testing.T) {
+	origHold := verifyActiveHoldSeconds
+	verifyActiveHoldSeconds = 200 * time.Millisecond
+	t.Cleanup(func() { verifyActiveHoldSeconds = origHold })
+
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(key, "is-active ccrouter"):
+				return []byte("active\n"), nil
+			case strings.Contains(key, "show") && strings.Contains(key, "NRestarts"):
+				return []byte("0\n"), nil
+			}
+			return []byte{}, nil
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+
+	if err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 3*time.Second); err != nil {
+		t.Fatalf("VerifyActive returned error for a healthy service: %v", err)
 	}
 }
 

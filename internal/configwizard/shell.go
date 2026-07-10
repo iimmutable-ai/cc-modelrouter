@@ -52,9 +52,17 @@ func GetShellConfig() (*ShellConfig, error) {
 }
 
 // GenerateExportLine generates the shell export line for an API key.
+//
+// Emits a `# provider: <name>` comment immediately before the export so
+// parseEnvExports can recover the original provider name (including case)
+// from the file. This closes the round-trip gap that produced duplicate
+// lowercase provider entries (e.g. `bigmodelKNDY` → `bigmodelkndy`) when
+// the env var name was the only carrier of the provider name — ToUpper in
+// GenerateEnvVarName collapsed case, and the reverse ToLower in
+// parseEnvExports had no way to recover it.
 func GenerateExportLine(providerName, apiKey string) string {
 	varName := GenerateEnvVarName(providerName)
-	return fmt.Sprintf(`# ccrouter - %s
+	return fmt.Sprintf(`# provider: %s
 export %s="%s"`, providerName, varName, apiKey)
 }
 
@@ -207,12 +215,14 @@ func (s *ShellConfig) WriteEnvFile(apiKeys map[string]string) (string, error) {
 // provider name → API key. Returns an empty map (nil error) if the file
 // does not exist. Malformed lines are skipped silently.
 //
-// This is the inverse of WriteEnvFile. Provider-name recovery relies on
-// GenerateEnvVarName's rule (uppercase + non-alphanumeric → '_'); for the
-// built-in presets (all lowercase ASCII) the round-trip is exact. Custom
-// provider names containing hyphens or dots will come back lowercased with
-// '_' (e.g. "my-provider" → "my_provider") — rename via `ccrouter config`
-// if precision matters.
+// This is the inverse of WriteEnvFile. Provider names written by current
+// code are recovered verbatim from the `# provider: <name>` comment that
+// precedes each export, so mixed-case names like `bigmodelKNDY` round-trip
+// exactly. Legacy files written before the case-preservation fix lacked
+// the comment; for those, the name is derived from the env var name by
+// stripping the CCROUTER_ prefix and _API_KEY suffix and lowercasing, so
+// mixed-case custom names come back lowercased. Re-running
+// `ccrouter config` regenerates the file with comments.
 func (s *ShellConfig) LoadEnvFile() (map[string]string, error) {
 	home, _ := EffectiveHomeDir()
 	path := filepath.Join(home, ".cc-modelrouter", "shell_env.sh")
@@ -228,30 +238,61 @@ func (s *ShellConfig) LoadEnvFile() (map[string]string, error) {
 
 // parseEnvExports extracts CCROUTER_<NAME>_API_KEY="value" pairs from the
 // shell_env.sh file content into a provider-name → key map.
+//
+// When a `# provider: <name>` comment immediately precedes an export line,
+// the name is taken verbatim from the comment, preserving original casing.
+// Without such a comment (legacy shell_env.sh files written before the
+// case-preservation fix), the name is derived from the env var by stripping
+// `CCROUTER_` and `_API_KEY` and lowercasing — the historical behavior.
 func parseEnvExports(content string) map[string]string {
 	out := map[string]string{}
-	const prefix = "export CCROUTER_"
+	const exportPrefix = "export CCROUTER_"
+	const providerCommentPrefix = "# provider:"
+	var pendingProviderName string
+	pendingValid := false
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, prefix) {
+		if strings.HasPrefix(trimmed, providerCommentPrefix) {
+			name := strings.TrimSpace(strings.TrimPrefix(trimmed, providerCommentPrefix))
+			if name != "" {
+				pendingProviderName = name
+				pendingValid = true
+			}
+			continue
+		}
+		if !strings.HasPrefix(trimmed, exportPrefix) {
+			// Any non-blank, non-provider-comment line between a provider
+			// comment and its export invalidates the pending name — a
+			// provider comment must be immediately followed by its export.
+			if trimmed != "" {
+				pendingValid = false
+			}
 			continue
 		}
 		eq := strings.Index(trimmed, "=")
 		if eq < 0 {
+			pendingValid = false
 			continue
 		}
-		varName := strings.TrimSpace(trimmed[len(prefix):eq])
+		varName := strings.TrimSpace(trimmed[len(exportPrefix):eq])
 		val := strings.TrimSpace(trimmed[eq+1:])
 		val = strings.TrimPrefix(val, `"`)
 		val = strings.TrimSuffix(val, `"`)
 		if !strings.HasSuffix(varName, "_API_KEY") || val == "" {
+			pendingValid = false
 			continue
 		}
-		name := strings.TrimSuffix(varName, "_API_KEY")
-		if name == "" {
+		envName := strings.TrimSuffix(varName, "_API_KEY")
+		if envName == "" {
+			pendingValid = false
 			continue
 		}
-		out[strings.ToLower(name)] = val
+		if pendingValid {
+			out[pendingProviderName] = val
+		} else {
+			out[strings.ToLower(envName)] = val
+		}
+		pendingValid = false
 	}
 	return out
 }

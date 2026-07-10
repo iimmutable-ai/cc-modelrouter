@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	"github.com/iimmutable-ai/cc-modelrouter/internal/usage"
 )
 
@@ -231,12 +232,12 @@ func calculateDateRangeForInstances(dateRange DateRange) (time.Time, time.Time) 
 
 // discoverInstances finds all instances in the given date range
 func discoverInstances(dateRange DateRange) ([]InstanceInfo, error) {
-	homeDir, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get home dir: %w", err)
+		return nil, fmt.Errorf("failed to get data dir: %w", err)
 	}
 
-	instancesDir := filepath.Join(homeDir, ".cc-modelrouter", "instances")
+	instancesDir := filepath.Join(dataDir, "instances")
 
 	files, err := os.ReadDir(instancesDir)
 	if err != nil {
@@ -276,7 +277,7 @@ func discoverInstances(dateRange DateRange) ([]InstanceInfo, error) {
 		}
 
 		isRunning := processExists(meta.PID)
-		logPath := filepath.Join(homeDir, ".cc-modelrouter", "logs", meta.ID+".log")
+		logPath := filepath.Join(dataDir, "logs", meta.ID+".log")
 
 		instances = append(instances, InstanceInfo{
 			ID:        meta.ID,

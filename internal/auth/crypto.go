@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // masterKeyOnce ensures the master key is loaded only once.
@@ -18,11 +20,11 @@ var masterKeyErr error
 
 // masterKeyPath returns the path to the master key file.
 func masterKeyPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cc-modelrouter", "master.key"), nil
+	return filepath.Join(dataDir, "master.key"), nil
 }
 
 // loadMasterKey loads or generates the 256-bit master key.

@@ -30,6 +30,35 @@ func EffectiveHomeDir() (string, error) {
 	return os.UserHomeDir()
 }
 
+// DataDir returns the directory ccrouter should use for runtime data
+// files: usage.db, logs/, instances/, restarts.jsonl, master.key, and
+// the autocert cache.
+//
+// Resolution order:
+//  1. $CCROUTER_DATA_DIR — explicit override. The start command sets
+//     this from EffectiveHomeDir()+"/.cc-modelrouter" before launching
+//     the service; the systemd unit's Environment=HOME=... directive
+//     otherwise repoints $HOME at the data dir, which would cause the
+//     fallback below to double the suffix (/home/admin/.cc-modelrouter/.cc-modelrouter).
+//  2. $HOME/.cc-modelrouter — the default for ad-hoc `ccrouter start`
+//     invocations where CCROUTER_DATA_DIR hasn't been set.
+//
+// All runtime subsystems (logging, usage, daemon, restartlog, auth,
+// monitor) MUST route through this helper rather than appending
+// ".cc-modelrouter" to os.UserHomeDir() themselves — otherwise they
+// produce a doubled path under the systemd unit (where HOME is the
+// data dir, not the user's home).
+func DataDir() (string, error) {
+	if v := os.Getenv("CCROUTER_DATA_DIR"); v != "" {
+		return v, nil
+	}
+	home, err := EffectiveHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cc-modelrouter"), nil
+}
+
 // GlobalConfigPath returns the global config file path.
 func GlobalConfigPath() string {
 	home, _ := EffectiveHomeDir()

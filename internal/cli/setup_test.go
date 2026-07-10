@@ -354,6 +354,73 @@ func TestBuildConfig_PreservesAutoRestart(t *testing.T) {
 	}
 }
 
+// TestBuildConfig_MergesCaseInsensitive verifies that a provider key coming
+// from shell_env.sh (which lowercases via parseEnvExports when no `# provider:`
+// comment is present) still matches an existing mixed-case provider entry in
+// config.json. This is the v0.2.12 regression: a provider named `bigmodelKNDY`
+// in config.json was missed by buildConfig's case-sensitive Go map lookup when
+// the setup answers had the lowercased `bigmodelkndy` from a legacy
+// shell_env.sh — the result was a duplicate lowercased entry with no baseURL,
+// crashing startup with "baseURL is required".
+//
+// The fix: buildConfig folds both sides to lowercase when matching, and
+// writes the merged entry back under the original-case key from existing
+// config (so a successful merge leaves exactly ONE entry).
+func TestBuildConfig_MergesCaseInsensitive(t *testing.T) {
+	existing := config.Defaults()
+	existing.Providers["bigmodelKNDY"] = config.ProviderConfig{
+		APIKey:      "${CCROUTER_BIGMODELKNDY_API_KEY}",
+		BaseURL:     "https://api.bigmodelkndy.example.com",
+		Transformer: "anthropic",
+		Models:      []string{"kndy-1"},
+	}
+
+	ans := &collectedAnswers{
+		Host:             "0.0.0.0",
+		Port:             "8443",
+		TLSMode:          "none",
+		Scope:            svcinstall.ScopeSystem,
+		APIKeys:          map[string]string{"bigmodelkndy": "sk-refreshed"},
+		TestModels:       map[string]string{"bigmodelkndy": "kndy-1"},
+		ProviderBaseURLs: map[string]string{},
+	}
+
+	cfg := buildConfig(ans, existing)
+
+	// Must have exactly ONE entry that matches case-insensitively.
+	var matchedKey string
+	for k := range cfg.Providers {
+		if strings.EqualFold(k, "bigmodelKNDY") {
+			matchedKey = k
+		}
+	}
+	if matchedKey == "" {
+		t.Fatalf("no case-insensitive match for bigmodelKNDY; got providers: %+v", cfg.Providers)
+	}
+	if matchedKey != "bigmodelKNDY" {
+		t.Errorf("merged entry must preserve original-case key %q; got %q (duplicate lowercased entries mean the bug is back)", "bigmodelKNDY", matchedKey)
+	}
+	// Verify count: there must be exactly ONE entry, not two.
+	count := 0
+	for k := range cfg.Providers {
+		if strings.EqualFold(k, "bigmodelKNDY") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 entry matching bigmodelKNDY case-insensitively; got %d (providers: %+v)", count, cfg.Providers)
+	}
+
+	// Merged entry must keep the original baseURL and have a refreshed APIKey.
+	pc := cfg.Providers[matchedKey]
+	if pc.BaseURL != "https://api.bigmodelkndy.example.com" {
+		t.Errorf("BaseURL = %q; want preserved original", pc.BaseURL)
+	}
+	if pc.APIKey != "${CCROUTER_BIGMODELKNDY_API_KEY}" {
+		t.Errorf("APIKey = %q; want placeholder (refreshed)", pc.APIKey)
+	}
+}
+
 // TestBuildConfig_NewCustomProvider_UsesProviderBaseURLs covers the case
 // where the operator adds a brand-new custom provider at [4/5] (no preset,
 // no existing entry). The operator-typed baseURL must land on the new

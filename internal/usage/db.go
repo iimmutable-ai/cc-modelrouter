@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -28,11 +29,11 @@ type Record struct {
 
 // DBPath returns the path to the usage database.
 func DBPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cc-modelrouter", "usage.db"), nil
+	return filepath.Join(dataDir, "usage.db"), nil
 }
 
 // InitDB initializes the usage database.

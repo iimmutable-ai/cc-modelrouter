@@ -783,37 +783,84 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 // on any other state at timeout — "activating", "failed", "deactivating",
 // or empty (unit not found / systemctl errored). The caller is expected
 // to surface the wrapped journal text to the user and return non-zero.
+// verifyActiveHoldSeconds is the duration `is-active` must continuously
+// report "active" before VerifyActive declares the service healthy.
+// Defaults to 3s so a Type=simple unit that forks, reports active, then
+// crashes within one RestartSec=5 cycle is caught by the hold rather
+// than falsely declared healthy on the first sample. Exposed as a var
+// (not a const) so tests can shrink it to keep the suite fast.
+var verifyActiveHoldSeconds = 3 * time.Second
+
 func (s SystemdInstaller) VerifyActive(opts InstallOptions, timeout time.Duration) error {
 	const serviceName = "ccrouter"
 	const pollInterval = 500 * time.Millisecond
 
 	deadline := time.Now().Add(timeout)
+	sawActive := false
+	var holdUntil time.Time
 	for time.Now().Before(deadline) {
-		cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "is-active", serviceName)
-		if err != nil {
-			return fmt.Errorf("verify-active: build is-active command: %w", err)
-		}
-		out, _ := s.runner()(cmdName, cmdArgs...)
-		state := strings.TrimSpace(string(out))
+		state := s.isActiveState(opts, serviceName)
 		if state == "active" {
-			return nil
+			if !sawActive {
+				sawActive = true
+				holdUntil = time.Now().Add(verifyActiveHoldSeconds)
+			}
+			// While holding, sample NRestarts. A non-zero count means
+			// the service has already crashed and been restarted by
+			// systemd since Enable() — a crash-loop even though the
+			// current sample is "active".
+			if n := strings.TrimSpace(string(s.nRestarts(opts, serviceName))); n != "" && n != "0" {
+				break
+			}
+			if time.Now().After(holdUntil) {
+				return nil // sustained active for the full hold with zero restarts
+			}
+		} else if sawActive {
+			// Left "active" during the hold — service crashed. Stop
+			// waiting; diagnostics below will show why.
+			break
 		}
 		time.Sleep(pollInterval)
 	}
 
-	// Timed out — capture diagnostics. journalctl and `systemctl status`
-	// both need the same sudo escalation rules as systemctl itself for
-	// system-scope installs driven by a non-root user. We don't have a
-	// dedicated helper for journalctl, so build it inline mirroring
-	// runSystemctlCmdEscalating's sudo -n then interactive pattern.
+	// Timed out or broke out — capture diagnostics. journalctl and
+	// `systemctl status` both need the same sudo escalation rules as
+	// systemctl itself for system-scope installs driven by a non-root
+	// user. We don't have a dedicated helper for journalctl, so build
+	// it inline mirroring runSystemctlCmdEscalating's sudo -n then
+	// interactive pattern.
 	journalOut := s.runCaptureEscalating(opts.Scope, "journalctl", "-u", serviceName, "-n", "30", "--no-pager")
 	statusName, statusArgs, _ := buildSystemctlCommandForProd(opts.Scope, "status", serviceName, "--no-pager", "--full")
 	statusOut, _ := s.runner()(statusName, statusArgs...)
 
-	return fmt.Errorf("service did not become active within %s — last journal lines:\n%s\n\nsystemctl status:\n%s",
+	return fmt.Errorf("service did not reach a sustained active state within %s — last journal lines:\n%s\n\nsystemctl status:\n%s",
 		timeout,
 		strings.TrimSpace(string(journalOut)),
 		strings.TrimSpace(string(statusOut)))
+}
+
+// isActiveState returns the trimmed output of `systemctl is-active
+// ccrouter` (e.g. "active", "activating", "failed"). Empty string means
+// the unit was not found or systemctl errored.
+func (s SystemdInstaller) isActiveState(opts InstallOptions, serviceName string) string {
+	cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "is-active", serviceName)
+	if err != nil {
+		return ""
+	}
+	out, _ := s.runner()(cmdName, cmdArgs...)
+	return strings.TrimSpace(string(out))
+}
+
+// nRestarts returns the trimmed value of the unit's NRestarts property
+// (number of times systemd has restarted the unit since it was last
+// enabled). Empty string means the property could not be read.
+func (s SystemdInstaller) nRestarts(opts InstallOptions, serviceName string) []byte {
+	cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "show", serviceName, "-p", "NRestarts", "--value")
+	if err != nil {
+		return nil
+	}
+	out, _ := s.runner()(cmdName, cmdArgs...)
+	return out
 }
 
 // runCaptureEscalating runs an arbitrary diagnostic command (journalctl,

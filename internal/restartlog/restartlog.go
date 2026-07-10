@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // Event is the kind of restart-lifecycle event.
@@ -43,13 +45,13 @@ type Record struct {
 	PID      int       `json:"pid,omitempty"`
 }
 
-// Path returns the absolute path to ~/.cc-modelrouter/restarts.jsonl.
+// Path returns the absolute path to <dataDir>/restarts.jsonl.
 func Path() (string, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cc-modelrouter", "restarts.jsonl"), nil
+	return filepath.Join(dataDir, "restarts.jsonl"), nil
 }
 
 // Append serializes r as one JSON line and appends it to the restart log.

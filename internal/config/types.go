@@ -282,12 +282,12 @@ func (lc *LoggingConfig) GetLogPath() (string, error) {
 		return lc.FilePath, nil
 	}
 
-	home, err := os.UserHomeDir()
+	dataDir, err := DataDir()
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(home, ".cc-modelrouter", "router.log"), nil
+	return filepath.Join(dataDir, "router.log"), nil
 }
 
 // GetLogPathWithInstance returns the resolved log file path with an instance ID.
@@ -297,12 +297,12 @@ func (lc *LoggingConfig) GetLogPathWithInstance(instanceID string) (string, erro
 		return lc.FilePath, nil
 	}
 
-	home, err := os.UserHomeDir()
+	dataDir, err := DataDir()
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(home, ".cc-modelrouter", "logs", instanceID+".log"), nil
+	return filepath.Join(dataDir, "logs", instanceID+".log"), nil
 }
 
 // ShouldLogToFile returns true if logs should go to a file.

@@ -494,3 +494,50 @@ func TestEffectiveHomeDir(t *testing.T) {
 		})
 	}
 }
+
+// TestDataDir verifies the CCROUTER_DATA_DIR override and the fallback
+// to $HOME/.cc-modelrouter. This matters because the systemd unit sets
+// HOME=<DataDir> (e.g. /home/admin/.cc-modelrouter), so subsystems that
+// blindly do filepath.Join(os.UserHomeDir(), ".cc-modelrouter") would
+// produce a doubled path (/home/admin/.cc-modelrouter/.cc-modelrouter).
+// DataDir() must honor the explicit env override to avoid that.
+func TestDataDir(t *testing.T) {
+	osHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir failed: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		dataDir string // CCROUTER_DATA_DIR value; "" to unset
+		want    string
+	}{
+		{
+			name:    "CCROUTER_DATA_DIR set is used verbatim",
+			dataDir: "/var/lib/ccrouter",
+			want:    "/var/lib/ccrouter",
+		},
+		{
+			name:    "CCROUTER_DATA_DIR unset falls back to $HOME/.cc-modelrouter",
+			dataDir: "",
+			want:    filepath.Join(osHome, ".cc-modelrouter"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.dataDir == "" {
+				t.Setenv("CCROUTER_DATA_DIR", "")
+			} else {
+				t.Setenv("CCROUTER_DATA_DIR", tt.dataDir)
+			}
+			got, err := DataDir()
+			if err != nil {
+				t.Fatalf("DataDir returned error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("DataDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -144,20 +144,20 @@ func InitToSilent() {
 // DefaultLogPath returns the default log file path.
 // Note: For per-instance logging, use GetLogPathWithInstance instead.
 func DefaultLogPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cc-modelrouter", "router.log"), nil
+	return filepath.Join(dataDir, "router.log"), nil
 }
 
 // LogsDir returns the logs directory path.
 func LogsDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cc-modelrouter", "logs"), nil
+	return filepath.Join(dataDir, "logs"), nil
 }
 
 // GetLogger returns the underlying logrus logger for advanced usage.
