@@ -37,6 +37,7 @@ func TestRenderUnit_SystemScope_HasHardening(t *testing.T) {
 		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
 		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
 		"Environment=HOME=/var/lib/ccrouter",
+		"Environment=CCROUTER_DATA_DIR=/var/lib/ccrouter",
 		"WantedBy=multi-user.target",
 	}
 	for _, want := range checks {

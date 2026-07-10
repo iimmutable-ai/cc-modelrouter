@@ -135,11 +135,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// cache, future features) resolves to the operator's data dir rather
 	// than the service user's $HOME. Under a system-scope systemd unit,
 	// $HOME resolves to /var/lib/ccrouter — outside ReadWritePaths and
-	// blocked by ProtectSystem=strict. EffectiveHomeDir honors SUDO_USER
-	// for the bare-sudo case and otherwise resolves the invoking user's
-	// home, matching what setup wrote into the unit's HOME= directive.
-	if dataHome, derr := config.EffectiveHomeDir(); derr == nil && dataHome != "" {
-		_ = os.Setenv("CCROUTER_DATA_DIR", filepath.Join(dataHome, ".cc-modelrouter"))
+	// blocked by ProtectSystem=strict.
+	if dir := resolveDataDir(); dir != "" {
+		_ = os.Setenv("CCROUTER_DATA_DIR", dir)
 	}
 
 	// Validate and set profile if specified
@@ -801,4 +799,31 @@ func isLocalhost(host string) bool {
 		return true
 	}
 	return false
+}
+
+// resolveDataDir computes the value of CCROUTER_DATA_DIR that runStart
+// publishes into the process env. Resolution order:
+//
+//  1. $CCROUTER_DATA_DIR — explicit operator override, returned verbatim.
+//  2. $HOME if it already ends with `/.cc-modelrouter` — the system-scope
+//     systemd unit sets `Environment=HOME=<DataDir>` where <DataDir> is
+//     the operator's ~/.cc-modelrouter path. Treating that as the data
+//     dir avoids the doubled path (~/.cc-modelrouter/.cc-modelrouter/...)
+//     that would otherwise arise when we append the suffix.
+//  3. $HOME + /.cc-modelrouter — the default for ad-hoc `ccrouter start`
+//     invocations from a TTY where $HOME is the real user home.
+//
+// Returns "" if none of the above resolve.
+func resolveDataDir() string {
+	if v := os.Getenv("CCROUTER_DATA_DIR"); v != "" {
+		return v
+	}
+	home, err := config.EffectiveHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	if strings.HasSuffix(home, string(filepath.Separator)+".cc-modelrouter") {
+		return home
+	}
+	return filepath.Join(home, ".cc-modelrouter")
 }

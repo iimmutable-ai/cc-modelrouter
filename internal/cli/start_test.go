@@ -5,6 +5,63 @@ import (
 	"time"
 )
 
+// TestResolveDataDir verifies the data-dir resolution logic does not
+// produce a doubled path (e.g. /home/admin/.cc-modelrouter/.cc-modelrouter)
+// when $HOME already points at the data dir — which is exactly what the
+// system-scope systemd unit does via `Environment=HOME=<DataDir>`.
+//
+// Cases:
+//  1. CCROUTER_DATA_DIR already set → returned verbatim (no append).
+//  2. CCROUTER_DATA_DIR unset, HOME ends with /.cc-modelrouter → treated
+//     as the data dir already (no append).
+//  3. CCROUTER_DATA_DIR unset, HOME is a normal user home → append
+//     /.cc-modelrouter.
+func TestResolveDataDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		dataDir string // CCROUTER_DATA_DIR; "" to unset
+		home    string // HOME; "" to leave unset
+		want    string
+	}{
+		{
+			name:    "explicit CCROUTER_DATA_DIR returned verbatim",
+			dataDir: "/var/lib/ccrouter",
+			home:    "/home/admin",
+			want:    "/var/lib/ccrouter",
+		},
+		{
+			name: "HOME is the data dir (systemd unit case) — no doubling",
+			home: "/home/admin/.cc-modelrouter",
+			want: "/home/admin/.cc-modelrouter",
+		},
+		{
+			name: "HOME is a normal user home — append .cc-modelrouter",
+			home: "/home/admin",
+			want: "/home/admin/.cc-modelrouter",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.dataDir == "" {
+				t.Setenv("CCROUTER_DATA_DIR", "")
+			} else {
+				t.Setenv("CCROUTER_DATA_DIR", tt.dataDir)
+			}
+			t.Setenv("SUDO_USER", "")
+			if tt.home == "" {
+				t.Setenv("HOME", "")
+			} else {
+				t.Setenv("HOME", tt.home)
+			}
+			got := resolveDataDir()
+			if got != tt.want {
+				t.Errorf("resolveDataDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsLocalhost(t *testing.T) {
 	tests := []struct {
 		host string
