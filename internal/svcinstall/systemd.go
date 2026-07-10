@@ -415,6 +415,76 @@ func buildSystemctlCommandForProd(scope Scope, args ...string) (string, []string
 	return buildSystemctlCommand(scope, os.Geteuid(), os.Getenv("SUDO_USER"), user.Lookup, args...)
 }
 
+// runSystemctlCmdEscalating runs `systemctl <args>` via buildSystemctlCommandForProd
+// for scope, escalating to sudo when ScopeSystem is being driven by a
+// non-root invoking user. The non-sudo path covers ScopeUser (which talks
+// to the user manager directly) and actual-root invocations (which don't
+// need sudo to reach the system manager).
+//
+// Why sudo at all: `systemctl daemon-reload` and `systemctl enable --now`
+// for a system-scope unit write to /run/systemd/system and read
+// /etc/systemd/system — both require root, and polkit typically refuses
+// them without an interactive auth agent. When ccrouter is invoked from a
+// non-root SSH session (the common case for `ccrouter setup server` on a
+// fresh box), `systemctl` returns "Interactive authentication required."
+// sudo is the universal escape hatch.
+//
+// The sudo wrapper mirrors enableLinger's pattern (lines ~602-618):
+//
+//  1. Try `sudo -n` first — succeeds immediately on passwordless-sudo
+//     boxes, fails fast otherwise.
+//  2. Fall back to interactive `sudo` so the user can actually type a
+//     password.
+//
+// `run` is the command runner (real or fake). The action string is built
+// from the un-escalated systemctl args so error messages reference the
+// systemctl action, not "sudo -n systemctl ...".
+func runSystemctlCmdEscalating(
+	run func(name string, args ...string) ([]byte, error),
+	scope Scope, args ...string,
+) error {
+	cmdName, cmdArgs, err := buildSystemctlCommandForProd(scope, args...)
+	if err != nil {
+		return err
+	}
+	action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
+
+	if !needsSudo(scope) {
+		out, err := run(cmdName, cmdArgs...)
+		if err != nil {
+			return wrapRunnerErr(action, out, err)
+		}
+		return nil
+	}
+
+	// ScopeSystem + non-root: try sudo -n first, then interactive sudo.
+	// We don't pre-check for the binary — if sudo is missing, the first
+	// exec will return an *exec.Error and wrapRunnerErr surfaces a useful
+	// message ("sudo not found in PATH — re-run with sudo").
+	sudoArgs := append([]string{"-n"}, append([]string{cmdName}, cmdArgs...)...)
+	if _, err := run("sudo", sudoArgs...); err == nil {
+		return nil
+	}
+	sudoArgs = append([]string{cmdName}, cmdArgs...)
+	out, err := run("sudo", sudoArgs...)
+	if err != nil {
+		return wrapRunnerErr("sudo "+action, out, err)
+	}
+	return nil
+}
+
+// needsSudo reports whether a ScopeSystem install running as the current
+// process requires sudo escalation to talk to systemctl. The two cases
+// that DON'T need it: actual root (euid 0) and bare-sudo (euid 0 with
+// SUDO_USER — buildSystemctlCommandForProd already handled it via runuser,
+// though for ScopeSystem the runuser path doesn't kick in).
+func needsSudo(scope Scope) bool {
+	if scope != ScopeSystem {
+		return false
+	}
+	return os.Geteuid() != 0
+}
+
 // userSystemdSocketPath returns the private socket path for the user
 // manager of the given uid. Exposed as a helper so tests can compute the
 // same path the production code polls.
@@ -681,23 +751,17 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 			return err
 		}
 	} else {
-		cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "daemon-reload")
-		if err != nil {
+		// runSystemctlCmdEscalating handles the sudo wrapping for
+		// non-root ScopeSystem installs (the failing "Interactive
+		// authentication required" case). For ScopeUser and actual root
+		// it calls systemctl directly with no escalation.
+		if err := runSystemctlCmdEscalating(s.runner(), opts.Scope, "daemon-reload"); err != nil {
 			return err
-		}
-		action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
-		if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
-			return wrapRunnerErr(action, out, err)
 		}
 	}
 
-	cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "enable", "--now", serviceName)
-	if err != nil {
+	if err := runSystemctlCmdEscalating(s.runner(), opts.Scope, "enable", "--now", serviceName); err != nil {
 		return err
-	}
-	action := fmt.Sprintf("%s %s", cmdName, strings.Join(cmdArgs, " "))
-	if out, err := s.runner()(cmdName, cmdArgs...); err != nil {
-		return wrapRunnerErr(action, out, err)
 	}
 	return nil
 }

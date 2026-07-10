@@ -143,13 +143,15 @@ func TestString_RuntimeFallbackStubbed(t *testing.T) {
 }
 
 // TestDetectFromGit_RunsInRepo is a smoke test: the real defaultDetectFromGit
-// must work inside this repo (on dev-local), returning tag="dev" and a
-// 12-char YYMMDDHHmmss build timestamp. If this fails outside a git checkout,
-// the rest of the fallback chain still works (returns Fallback).
+// must work inside this repo, returning a non-empty tag and a 12-char
+// YYMMDDHHmmss build timestamp. Branch-agnostic — tag is "dev" on dev-local
+// or the latest git tag (e.g. "v0.2.11") on other branches.
+// If this fails outside a git checkout, the rest of the fallback chain still
+// works (returns Fallback).
 func TestDetectFromGit_RunsInRepo(t *testing.T) {
 	tag, build := detectFromGit()
-	if tag != "dev" {
-		t.Fatalf("detectFromGit() tag = %q, want %q (expected dev-local branch)", tag, "dev")
+	if tag == "" {
+		t.Fatalf("detectFromGit() tag empty — expected a value in a real git checkout")
 	}
 	if len(build) != 12 {
 		t.Fatalf("detectFromGit() build = %q, want 12 chars (YYMMDDHHmmss)", build)

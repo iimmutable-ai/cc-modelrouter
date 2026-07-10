@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	"github.com/iimmutable-ai/cc-modelrouter/internal/svcinstall"
 )
 
@@ -215,4 +216,275 @@ func TestWriteEnvFileForSystemd_SystemScope_UsesSudo(t *testing.T) {
 
 	// Cleanup root-owned artifacts.
 	_, _ = exec.Command("sudo", "rm", "-rf", rootOwned).CombinedOutput()
+}
+
+// TestBuildConfig_NilExisting_PresetProvider verifies the first-install path:
+// when no existing config is supplied, preset providers get their preset
+// baseURL, the env-var placeholder for the API key, and preset models.
+func TestBuildConfig_NilExisting_PresetProvider(t *testing.T) {
+	ans := &collectedAnswers{
+		Host:             "0.0.0.0",
+		Port:             "8443",
+		TLSMode:          "none",
+		Scope:            svcinstall.ScopeSystem,
+		APIKeys:          map[string]string{"bigmodel": "sk-synthetic-key"},
+		TestModels:       map[string]string{"bigmodel": "glm-4.6"},
+		ProviderBaseURLs: map[string]string{},
+	}
+
+	cfg := buildConfig(ans, nil)
+
+	pc, ok := cfg.Providers["bigmodel"]
+	if !ok {
+		t.Fatalf("expected providers[bigmodel] to exist")
+	}
+	if pc.APIKey != "${CCROUTER_BIGMODEL_API_KEY}" {
+		t.Errorf("APIKey = %q, want placeholder", pc.APIKey)
+	}
+	if pc.BaseURL == "" {
+		t.Errorf("BaseURL should be populated from preset for preset providers; got empty")
+	}
+	if len(pc.Models) == 0 {
+		t.Errorf("Models should be populated from preset for preset providers; got empty")
+	}
+}
+
+// TestBuildConfig_PreservesCustomProvider is the regression test for the
+// original bug. An existing config.json from `ccrouter config` had a custom
+// provider "myglm" with a real baseURL and transformer. setup server was
+// rebuilding providers from scratch and zeroing those fields, causing
+// `ccrouter start` to fail with "baseURL is required". The fix: merge onto
+// the existing config so those fields survive.
+func TestBuildConfig_PreservesCustomProvider(t *testing.T) {
+	existing := config.Defaults()
+	existing.Providers["myglm"] = config.ProviderConfig{
+		APIKey:      "${CCROUTER_MYGLM_API_KEY}",
+		BaseURL:     "https://api.myglm.example.com",
+		Transformer: "anthropic",
+		Models:      []string{"my-model-1", "my-model-2"},
+	}
+
+	ans := &collectedAnswers{
+		Host:             "0.0.0.0",
+		Port:             "8443",
+		TLSMode:          "none",
+		Scope:            svcinstall.ScopeSystem,
+		APIKeys:          map[string]string{"myglm": "sk-synthetic-newkey"},
+		TestModels:       map[string]string{"myglm": "my-model-1"},
+		ProviderBaseURLs: map[string]string{},
+	}
+
+	cfg := buildConfig(ans, existing)
+
+	pc, ok := cfg.Providers["myglm"]
+	if !ok {
+		t.Fatalf("providers[myglm] missing")
+	}
+	if pc.BaseURL != "https://api.myglm.example.com" {
+		t.Errorf("BaseURL = %q; want preserved value", pc.BaseURL)
+	}
+	if pc.Transformer != "anthropic" {
+		t.Errorf("Transformer = %q; want preserved value", pc.Transformer)
+	}
+	if len(pc.Models) != 2 || pc.Models[0] != "my-model-1" || pc.Models[1] != "my-model-2" {
+		t.Errorf("Models = %v; want preserved [my-model-1 my-model-2]", pc.Models)
+	}
+	if pc.APIKey != "${CCROUTER_MYGLM_API_KEY}" {
+		t.Errorf("APIKey = %q; want placeholder (refreshed)", pc.APIKey)
+	}
+}
+
+// TestBuildConfig_PreservesRoutes verifies that a hand-edited default route
+// (e.g. one configured via `ccrouter config`) is NOT replaced when setup
+// re-runs. setup only synthesizes a default route when none exists.
+func TestBuildConfig_PreservesRoutes(t *testing.T) {
+	existing := config.Defaults()
+	existing.Providers["bigmodel"] = config.ProviderConfig{
+		APIKey:      "${CCROUTER_BIGMODEL_API_KEY}",
+		BaseURL:     "https://open.bigmodel.cn/api",
+		Transformer: "glm",
+		Models:      []string{"glm-4.6"},
+	}
+	existing.Router.Routes["default"] = "bigmodel:glm-4.6;openrouter:anthropic/claude-sonnet-4"
+
+	ans := &collectedAnswers{
+		Host:             "0.0.0.0",
+		Port:             "8443",
+		TLSMode:          "none",
+		Scope:            svcinstall.ScopeSystem,
+		APIKeys:          map[string]string{"bigmodel": "sk-synthetic"},
+		TestModels:       map[string]string{"bigmodel": "glm-4.6"},
+		ProviderBaseURLs: map[string]string{},
+	}
+
+	cfg := buildConfig(ans, existing)
+
+	got := cfg.Router.Routes["default"]
+	want := "bigmodel:glm-4.6;openrouter:anthropic/claude-sonnet-4"
+	if got != want {
+		t.Errorf("default route = %q; want preserved %q", got, want)
+	}
+}
+
+// TestBuildConfig_PreservesAutoRestart verifies that a user-tuned restart
+// window survives re-running setup. The plan only fills defaults when the
+// existing config's fields are empty.
+func TestBuildConfig_PreservesAutoRestart(t *testing.T) {
+	existing := config.Defaults()
+	existing.Server.AutoRestartIdle = "4h"
+	existing.Server.AutoRestartBackoffMax = "30m"
+
+	ans := &collectedAnswers{
+		Host:             "0.0.0.0",
+		Port:             "8443",
+		TLSMode:          "none",
+		Scope:            svcinstall.ScopeSystem,
+		APIKeys:          map[string]string{},
+		TestModels:       map[string]string{},
+		ProviderBaseURLs: map[string]string{},
+	}
+
+	cfg := buildConfig(ans, existing)
+
+	if cfg.Server.AutoRestartIdle != "4h" {
+		t.Errorf("AutoRestartIdle = %q; want preserved 4h", cfg.Server.AutoRestartIdle)
+	}
+	if cfg.Server.AutoRestartBackoffMax != "30m" {
+		t.Errorf("AutoRestartBackoffMax = %q; want preserved 30m", cfg.Server.AutoRestartBackoffMax)
+	}
+}
+
+// TestBuildConfig_NewCustomProvider_UsesProviderBaseURLs covers the case
+// where the operator adds a brand-new custom provider at [4/5] (no preset,
+// no existing entry). The operator-typed baseURL must land on the new
+// provider entry, and transformer defaults to "anthropic" so the entry is
+// immediately usable.
+func TestBuildConfig_NewCustomProvider_UsesProviderBaseURLs(t *testing.T) {
+	ans := &collectedAnswers{
+		Host:       "0.0.0.0",
+		Port:       "8443",
+		TLSMode:    "none",
+		Scope:      svcinstall.ScopeSystem,
+		APIKeys:    map[string]string{"acme": "sk-synthetic-acme"},
+		TestModels: map[string]string{"acme": "acme-1"},
+		ProviderBaseURLs: map[string]string{
+			"acme": "https://api.acme.example.com/v1",
+		},
+	}
+
+	cfg := buildConfig(ans, nil)
+
+	pc, ok := cfg.Providers["acme"]
+	if !ok {
+		t.Fatalf("providers[acme] missing")
+	}
+	if pc.BaseURL != "https://api.acme.example.com/v1" {
+		t.Errorf("BaseURL = %q; want operator-entered URL", pc.BaseURL)
+	}
+	if pc.Transformer != "anthropic" {
+		t.Errorf("Transformer = %q; want default \"anthropic\" for new custom providers", pc.Transformer)
+	}
+	if pc.APIKey != "${CCROUTER_ACME_API_KEY}" {
+		t.Errorf("APIKey = %q; want placeholder", pc.APIKey)
+	}
+}
+
+// TestValidateAutocertDomain exercises the autocert FQDN validator used by
+// the [2/5] TLS prompt loop. The validator exists because two failure modes
+// can't be detected from config alone but will definitely break the service
+// at start time: an empty domain (autocert Manager has nothing to mint) and
+// an IP literal (Let's Encrypt won't issue via http-01 for IP identifiers).
+func TestValidateAutocertDomain(t *testing.T) {
+	tests := []struct {
+		name   string
+		domain string
+		wantOK bool
+	}{
+		{"empty", "", false},
+		{"IPv4 literal", "43.108.32.178", false},
+		{"IPv6 literal", "2001:db8::1", false},
+		{"IPv6 loopback", "::1", false},
+		{"valid DNS name", "ccrouter.example.com", true},
+		{"valid DNS single label", "localhost", true},
+		{"valid DNS with trailing dot", "ccrouter.example.com.", true},
+		{"mixed case", "CCRouter.Example.COM", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := validateAutocertDomain(tt.domain)
+			gotOK := reason == ""
+			if gotOK != tt.wantOK {
+				t.Errorf("validateAutocertDomain(%q) ok=%v, want %v (reason=%q)",
+					tt.domain, gotOK, tt.wantOK, reason)
+			}
+		})
+	}
+}
+
+// TestValidateAutocertDomain_RejectsIPWithReason verifies the IP-rejection
+// path returns a message that mentions the IP and points the user at the
+// alternative (manual TLS mode), so the prompt loop can surface it.
+func TestValidateAutocertDomain_RejectsIPWithReason(t *testing.T) {
+	reason := validateAutocertDomain("43.108.32.178")
+	if reason == "" {
+		t.Fatalf("expected rejection for IP literal, got OK")
+	}
+	if !strings.Contains(reason, "43.108.32.178") {
+		t.Errorf("rejection reason should mention the IP; got: %q", reason)
+	}
+	if !strings.Contains(reason, "manual") {
+		t.Errorf("rejection reason should suggest manual TLS mode; got: %q", reason)
+	}
+}
+
+// TestValidateScopeTLSCombo table-drives the scope+TLS cross-validation
+// added for Bug 1. The only failing combo is user-scope + autocert (service
+// can't bind :80 for the ACME http-01 challenge and would restart-loop);
+// every other combination is accepted so setup proceeds normally.
+func TestValidateScopeTLSCombo(t *testing.T) {
+	tests := []struct {
+		name    string
+		scope   svcinstall.Scope
+		tlsMode string
+		wantOK  bool
+	}{
+		{"user + autocert (bug case)", svcinstall.ScopeUser, "autocert", false},
+		{"user + manual", svcinstall.ScopeUser, "manual", true},
+		{"user + none", svcinstall.ScopeUser, "none", true},
+		{"system + autocert", svcinstall.ScopeSystem, "autocert", true},
+		{"system + manual", svcinstall.ScopeSystem, "manual", true},
+		{"system + none", svcinstall.ScopeSystem, "none", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ans := &collectedAnswers{Scope: tt.scope, TLSMode: tt.tlsMode}
+			reason := validateScopeTLSCombo(ans)
+			gotOK := reason == ""
+			if gotOK != tt.wantOK {
+				t.Errorf("validateScopeTLSCombo(scope=%v, tls=%q) ok=%v, want %v (reason=%q)",
+					tt.scope, tt.tlsMode, gotOK, tt.wantOK, reason)
+			}
+		})
+	}
+}
+
+// TestValidateScopeTLSCombo_RejectsWithActionableMessage verifies the
+// user-scope+autocert rejection message points the operator at both
+// remediation paths (system-scope, manual TLS) so the prompt loop's
+// re-pick guidance is actionable rather than just "no".
+func TestValidateScopeTLSCombo_RejectsWithActionableMessage(t *testing.T) {
+	ans := &collectedAnswers{Scope: svcinstall.ScopeUser, TLSMode: "autocert"}
+	reason := validateScopeTLSCombo(ans)
+	if reason == "" {
+		t.Fatalf("expected rejection for user+autocert, got OK")
+	}
+	if !strings.Contains(reason, ":80") {
+		t.Errorf("rejection should explain the :80 binding requirement; got: %q", reason)
+	}
+	if !strings.Contains(reason, "system-scope") {
+		t.Errorf("rejection should suggest system-scope; got: %q", reason)
+	}
+	if !strings.Contains(reason, "Manual") {
+		t.Errorf("rejection should suggest manual TLS mode; got: %q", reason)
+	}
 }

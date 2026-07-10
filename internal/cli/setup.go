@@ -13,6 +13,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +87,11 @@ type collectedAnswers struct {
 	Scope      svcinstall.Scope
 	APIKeys    map[string]string // provider name → real key
 	TestModels map[string]string // provider name → model used for TestProviderConnection
+	// ProviderBaseURLs captures operator-entered baseURLs for custom
+	// (non-preset) providers added at [4/5]. Only populated for providers
+	// that had no entry in the existing config.json at setup time —
+	// preset providers and preserved existing entries already have one.
+	ProviderBaseURLs map[string]string
 }
 
 func runSetupServer(dryRun bool, configPathOverride string) error {
@@ -112,8 +118,9 @@ func runSetupServer(dryRun bool, configPathOverride string) error {
 // collectAnswers runs the 5-step Q&A.
 func collectAnswers(p *setupprompt.Prompt) (*collectedAnswers, error) {
 	ans := &collectedAnswers{
-		APIKeys:    map[string]string{},
-		TestModels: map[string]string{},
+		APIKeys:          map[string]string{},
+		TestModels:       map[string]string{},
+		ProviderBaseURLs: map[string]string{},
 	}
 
 	// [1/5] Bind address
@@ -138,10 +145,14 @@ func collectAnswers(p *setupprompt.Prompt) (*collectedAnswers, error) {
 	switch tlsIdx {
 	case 0:
 		ans.TLSMode = "autocert"
-		ans.Domain = p.AskString("  Domain (FQDN)", "")
-		for ans.Domain == "" {
-			fmt.Println("  Domain is required for Let's Encrypt mode.")
-			ans.Domain = p.AskString("  Domain (FQDN)", "")
+		ans.Domain = strings.TrimSpace(p.AskString("  Domain (FQDN)", ""))
+		for {
+			if reason := validateAutocertDomain(ans.Domain); reason != "" {
+				fmt.Printf("  %s\n", reason)
+				ans.Domain = strings.TrimSpace(p.AskString("  Domain (FQDN)", ""))
+				continue
+			}
+			break
 		}
 		ans.Redirect = p.AskYesNo("  Redirect HTTP→HTTPS? (also serves the ACME http-01 challenge)", true)
 	case 1:
@@ -164,6 +175,24 @@ func collectAnswers(p *setupprompt.Prompt) (*collectedAnswers, error) {
 	}, 0)
 	ans.Scope = svcinstall.Scope(scopeIdx)
 
+	// Cross-validate TLS + scope: user-scope + autocert cannot bind :80
+	// for the ACME http-01 challenge (no CAP_NET_BIND_SERVICE), so the
+	// service would start, fail to bind, and restart-loop forever. Loop
+	// so the user can re-pick scope after reading why.
+	for {
+		if reason := validateScopeTLSCombo(ans); reason != "" {
+			fmt.Println("\n  ✗ " + reason)
+			fmt.Println("  Re-pick service level to continue.")
+			scopeIdx = p.AskChoice("  Select service level:", []string{
+				"System-level — dedicated `ccrouter` user, sudo required (recommended)",
+				"User-level — runs as current user, no sudo",
+			}, 0)
+			ans.Scope = svcinstall.Scope(scopeIdx)
+			continue
+		}
+		break
+	}
+
 	// [4/5] Provider API keys
 	fmt.Println("\n[4/5] Provider API keys")
 	fmt.Println("  Known providers: openrouter, bigmodel, gemini, anthropic, openai, aliyun, minimax")
@@ -181,6 +210,14 @@ func collectAnswers(p *setupprompt.Prompt) (*collectedAnswers, error) {
 // On EOF (Ctrl-D or end of piped input), the loop aborts immediately so
 // we don't spin forever on empty input.
 func collectProviders(p *setupprompt.Prompt, ans *collectedAnswers) {
+	// Load the existing config.json (if any) so we can reuse a previously
+	// set baseURL for a custom-named provider instead of re-prompting.
+	// A missing file just means existingProviders stays nil.
+	var existingProviders map[string]config.ProviderConfig
+	if cfgLoaded, err := config.Load(config.GlobalConfigPath()); err == nil {
+		existingProviders = cfgLoaded.Providers
+	}
+
 	// Discover existing keys so we don't clobber them on skip.
 	if shellCfg, err := configwizard.GetShellConfig(); err == nil {
 		if existing, err := shellCfg.LoadEnvFile(); err == nil && len(existing) > 0 {
@@ -229,8 +266,25 @@ func collectProviders(p *setupprompt.Prompt, ans *collectedAnswers) {
 		if hasPreset && len(preset.Models) > 0 {
 			testModel = preset.Models[0]
 			fmt.Printf("  Using preset: %s, default test model %q\n", preset.BaseURL, testModel)
-		} else {
-			fmt.Printf("  No preset for %q — you'll need to provide baseURL + model via `ccrouter config` later.\n", name)
+		}
+		// For non-preset providers we need a baseURL to build a working
+		// config entry. Try the existing config first (preserves a URL the
+		// operator already set via `ccrouter config`); otherwise prompt.
+		var baseURL string
+		if hasPreset {
+			baseURL = preset.BaseURL
+		} else if existingProviders != nil {
+			if pc, ok := existingProviders[name]; ok && pc.BaseURL != "" {
+				baseURL = pc.BaseURL
+				fmt.Printf("  Reusing baseURL from existing config: %s\n", baseURL)
+			}
+		}
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(p.AskString("  Base URL (e.g. https://api.example.com/v1)", ""))
+			for baseURL == "" {
+				fmt.Println("  Base URL is required when there's no preset for this provider.")
+				baseURL = strings.TrimSpace(p.AskString("  Base URL", ""))
+			}
 		}
 		testModel = p.AskString("  Model to test with", testModel)
 		if testModel == "" {
@@ -246,10 +300,6 @@ func collectProviders(p *setupprompt.Prompt, ans *collectedAnswers) {
 
 		// Build a temporary ProviderConfig with the literal key for the
 		// connectivity test. The literal never touches disk.
-		var baseURL string
-		if hasPreset {
-			baseURL = preset.BaseURL
-		}
 		testCfg := config.ProviderConfig{
 			APIKey:      key,
 			BaseURL:     baseURL,
@@ -262,6 +312,9 @@ func collectProviders(p *setupprompt.Prompt, ans *collectedAnswers) {
 			if p.AskYesNo("  Save this key anyway? (NOT recommended)", false) {
 				ans.APIKeys[name] = key
 				ans.TestModels[name] = testModel
+				if !hasPreset {
+					ans.ProviderBaseURLs[name] = baseURL
+				}
 			}
 			continue
 		}
@@ -269,6 +322,9 @@ func collectProviders(p *setupprompt.Prompt, ans *collectedAnswers) {
 			result.Latency.Milliseconds(), result.InputTokens, result.OutputTokens)
 		ans.APIKeys[name] = key
 		ans.TestModels[name] = testModel
+		if !hasPreset {
+			ans.ProviderBaseURLs[name] = baseURL
+		}
 
 		if !p.AskYesNo("  Add another provider?", false) {
 			return
@@ -338,7 +394,17 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 			configPath, homeDir, shellEnvPath)
 	}
 
-	cfg := buildConfig(ans)
+	// Load the existing config so we merge onto it rather than clobbering
+	// hand-edited provider baseURLs/transformers/routes. A missing file is
+	// the first-install case; any other read error is logged but tolerated
+	// (we fall back to defaults and let Save write a fresh file).
+	var existing *config.Config
+	if cfgLoaded, err := config.Load(configPath); err == nil {
+		existing = cfgLoaded
+	} else if !os.IsNotExist(err) {
+		logging.Warnf("[SETUP] could not load existing config at %s: %v — starting fresh", configPath, err)
+	}
+	cfg := buildConfig(ans, existing)
 
 	// Resolve binary path up front so dry-run can show it.
 	binPath, err := os.Executable()
@@ -374,12 +440,15 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 		return nil
 	}
 
-	// Existing config: prompt + backup before overwriting.
+	// Existing config: merge-by-default (we preserve provider baseURLs and
+	// routes), but still back up before writing so the operator can roll
+	// back. The backup is the safety net — the merge is supposed to be
+	// non-destructive, but a .bak costs nothing and makes recovery trivial.
 	if _, err := os.Stat(configPath); err == nil {
 		fmt.Printf("Config already exists at %s\n", configPath)
 		p := setupprompt.New()
-		if !p.AskYesNo("  Overwrite?", false) {
-			return fmt.Errorf("aborted: existing config not overwritten")
+		if !p.AskYesNo("  Merge setup answers into existing config?", true) {
+			return fmt.Errorf("aborted: existing config not modified")
 		}
 		bak := configPath + ".bak." + time.Now().Format("20060102-150405")
 		if err := os.Rename(configPath, bak); err != nil {
@@ -506,8 +575,20 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 // buildConfig assembles a *config.Config from collected answers. API keys
 // are stored as ${CCROUTER_<NAME>_API_KEY} placeholders; the real values
 // live in shell_env.sh (and service.env for system scope).
-func buildConfig(ans *collectedAnswers) *config.Config {
-	cfg := config.Defaults()
+//
+// If `existing` is non-nil, its provider/router/auto-restart fields are
+// preserved — `ans` only refreshes the APIKey placeholder and fills in
+// fields that are empty. Without this merge, re-running `setup server`
+// overwrites a config.json previously built by `ccrouter config` and
+// drops baseURL/transformer for any custom-named providers, causing
+// `ccrouter start` to fail with "baseURL is required".
+func buildConfig(ans *collectedAnswers, existing *config.Config) *config.Config {
+	var cfg *config.Config
+	if existing != nil {
+		cfg = existing
+	} else {
+		cfg = config.Defaults()
+	}
 	cfg.Server.Host = ans.Host
 	var port int
 	fmt.Sscanf(ans.Port, "%d", &port)
@@ -527,34 +608,65 @@ func buildConfig(ans *collectedAnswers) *config.Config {
 		}
 	}
 
-	// Auto-restart defaults — match what ScreenServer ships.
-	cfg.Server.AutoRestartIdle = "1h"
-	cfg.Server.AutoRestartBackoffMax = "5m"
+	// Auto-restart defaults — only applied when the existing config hasn't
+	// already set them, so a user-tuned restart window survives re-install.
+	if cfg.Server.AutoRestartIdle == "" {
+		cfg.Server.AutoRestartIdle = "1h"
+	}
+	if cfg.Server.AutoRestartBackoffMax == "" {
+		cfg.Server.AutoRestartBackoffMax = "5m"
+	}
 
-	// Providers
-	cfg.Providers = map[string]config.ProviderConfig{}
+	// Providers: merge onto existing. Preserved entries keep their
+	// baseURL/transformer/models; we only refresh the APIKey placeholder
+	// (the env var name is deterministic from the provider name).
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]config.ProviderConfig{}
+	}
 	for name := range ans.APIKeys {
 		envVar := configwizard.GenerateEnvVarName(name)
 		preset, hasPreset := configwizard.ProviderPresets[name]
-		pc := config.ProviderConfig{
-			APIKey:  "${" + envVar + "}",
-			BaseURL: preset.BaseURL,
-			Models:  preset.Models,
+		pc, hadExisting := cfg.Providers[name]
+		if !hadExisting {
+			pc = config.ProviderConfig{}
 		}
+		pc.APIKey = "${" + envVar + "}"
 		if hasPreset {
-			pc.Transformer = preset.Transformer
-		} else {
-			// No preset → no models list. Use the test model so the
-			// entry isn't empty; the user can refine via `ccrouter config`.
+			// Fill in any missing fields from the preset — preserves
+			// user overrides when present, fills defaults otherwise.
+			if pc.BaseURL == "" {
+				pc.BaseURL = preset.BaseURL
+			}
+			if pc.Transformer == "" {
+				pc.Transformer = preset.Transformer
+			}
+			if len(pc.Models) == 0 {
+				pc.Models = preset.Models
+			}
+		} else if !hadExisting {
+			// Fresh custom provider with no preset and no existing entry.
+			// Use the test model so the entry isn't empty; apply the
+			// operator-entered baseURL; default transformer to "anthropic"
+			// (the common case for Anthropic-compatible gateways).
 			if m := ans.TestModels[name]; m != "" {
 				pc.Models = []string{m}
+			}
+			if url := ans.ProviderBaseURLs[name]; url != "" {
+				pc.BaseURL = url
+			}
+			if pc.Transformer == "" {
+				pc.Transformer = "anthropic"
 			}
 		}
 		cfg.Providers[name] = pc
 	}
 
-	// Default route: chain of every configured provider's first model.
-	if len(cfg.Providers) > 0 {
+	// Default route: only synthesize when the existing config has no
+	// "default" route — preserves hand-edited chains from `ccrouter config`.
+	if cfg.Router.Routes == nil {
+		cfg.Router.Routes = map[string]string{}
+	}
+	if _, hasDefault := cfg.Router.Routes["default"]; !hasDefault && len(cfg.Providers) > 0 {
 		var chain []string
 		for _, name := range sortedProviderNames(cfg.Providers) {
 			pc := cfg.Providers[name]
@@ -578,6 +690,44 @@ func sortedProviderNames(m map[string]config.ProviderConfig) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// validateAutocertDomain returns "" if the input is acceptable as a Let's
+// Encrypt autocert FQDN, or a human-readable reason otherwise. Used by the
+// [2/5] TLS prompt loop so the user re-enters instead of crashing on start.
+//
+// Rules:
+//   - Empty string is rejected (the autocert Manager has no domain to mint).
+//   - IP literals (v4 or v6) are rejected — public ACME CAs do not issue
+//     certificates for IP identifiers under the http-01 flow autocert uses.
+//
+// Everything else is accepted at prompt time; DNS resolution and actual
+// issuance happen later when the server starts.
+func validateAutocertDomain(domain string) string {
+	if domain == "" {
+		return "Domain is required for Let's Encrypt mode."
+	}
+	if ip := net.ParseIP(domain); ip != nil {
+		return fmt.Sprintf("%q is an IP address — Let's Encrypt won't issue a cert for an IP via autocert. Use a DNS name, or switch to manual TLS mode.", domain)
+	}
+	return ""
+}
+
+// validateScopeTLSCombo rejects combinations of scope + TLS mode that will
+// crash at start time. Currently this is user-scope + autocert: autocert
+// needs to bind :80 for the ACME http-01 challenge, and user-scope systemd
+// units run without CAP_NET_BIND_SERVICE, so the listener fails to bind
+// and the service restart-loops.
+//
+// Returns "" if the combo is OK, else a human-readable reason that includes
+// the remediation (switch to system-scope, or pick manual TLS).
+func validateScopeTLSCombo(ans *collectedAnswers) string {
+	if ans.Scope == svcinstall.ScopeUser && ans.TLSMode == "autocert" {
+		return "user-scope systemd can't bind :80 (no CAP_NET_BIND_SERVICE) — " +
+			"autocert requires it for the ACME http-01 challenge. " +
+			"Pick system-scope, or switch TLS mode to Manual."
+	}
+	return ""
 }
 
 // writeEnvFileForSystemd writes an env file in systemd's EnvironmentFile=

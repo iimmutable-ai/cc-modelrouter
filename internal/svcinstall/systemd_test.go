@@ -165,6 +165,34 @@ func fakeRunner(outputs map[string][]byte) func(string, ...string) ([]byte, erro
 	}
 }
 
+// successRunner returns success for every call and appends the command
+// line to calls. Used by runSystemctlCmdEscalating tests to assert which
+// command (systemctl vs sudo -n vs sudo) was actually invoked.
+// (Name avoids collision with the recordingRunner struct type elsewhere
+// in this file.)
+func successRunner(calls *[]string) func(string, ...string) ([]byte, error) {
+	return func(name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, name+" "+strings.Join(args, " "))
+		return []byte(""), nil
+	}
+}
+
+// failFirstRunner returns err for the first call and success thereafter,
+// recording each attempt. Used to exercise the sudo -n → interactive sudo
+// retry loop in runSystemctlCmdEscalating.
+func failFirstRunner(calls *[]string) func(string, ...string) ([]byte, error) {
+	var n int
+	return func(name string, args ...string) ([]byte, error) {
+		line := name + " " + strings.Join(args, " ")
+		*calls = append(*calls, line)
+		n++
+		if n == 1 {
+			return []byte("sudo: a password is required"), os.ErrPermission
+		}
+		return []byte(""), nil
+	}
+}
+
 func TestAvailable_NonLinuxDoesNotPanic(t *testing.T) {
 	s := SystemdInstaller{run: fakeRunner(map[string][]byte{
 		"systemctl --version": []byte("systemd 245\n"),
@@ -1277,5 +1305,125 @@ func TestWaitForUserSystemdReady_RejectsStarting(t *testing.T) {
 	}
 	if callIdx != 3 {
 		t.Errorf("expected 3 probes (starting, starting, running), got %d", callIdx)
+	}
+}
+
+// TestRunSystemctlCmdEscalating_UserScope_NoSudo verifies that user-scope
+// installs never wrap systemctl in sudo — user-scope talks to the user
+// manager directly, no privilege required.
+func TestRunSystemctlCmdEscalating_UserScope_NoSudo(t *testing.T) {
+	var calls []string
+	run := successRunner(&calls)
+
+	if err := runSystemctlCmdEscalating(run, ScopeUser, "daemon-reload"); err != nil {
+		t.Fatalf("runSystemctlCmdEscalating user scope: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 invocation for user scope, got %d: %v", len(calls), calls)
+	}
+	want := "systemctl --user daemon-reload"
+	if calls[0] != want {
+		t.Errorf("invocation = %q; want %q (no sudo wrapping)", calls[0], want)
+	}
+}
+
+// TestRunSystemctlCmdEscalating_SystemScope_NonRootTriesSudoNonInteractiveFirst
+// reproduces the bug from the field: non-root user runs `ccrouter setup server`,
+// Enable() calls daemon-reload, and the bare `systemctl` invocation fails
+// with "Interactive authentication required." The fix wraps the call in
+// `sudo -n` first; on success we don't retry interactively.
+//
+// On a root-owned CI runner (e.g. some Docker containers) needsSudo returns
+// false and this test's assertion would be wrong, so we skip when euid==0.
+func TestRunSystemctlCmdEscalating_SystemScope_NonRootTriesSudoNonInteractiveFirst(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("test asserts non-root behavior; running as root in CI")
+	}
+	var calls []string
+	run := successRunner(&calls)
+
+	if err := runSystemctlCmdEscalating(run, ScopeSystem, "daemon-reload"); err != nil {
+		t.Fatalf("runSystemctlCmdEscalating system scope non-root: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 invocation (sudo -n succeeded), got %d: %v", len(calls), calls)
+	}
+	want := "sudo -n systemctl daemon-reload"
+	if calls[0] != want {
+		t.Errorf("invocation = %q; want %q (sudo -n then return on success)", calls[0], want)
+	}
+}
+
+// TestRunSystemctlCmdEscalating_SystemScope_NonRootFallsBackToInteractiveSudo
+// exercises the retry path: `sudo -n` fails (password required), and we
+// fall back to interactive `sudo` so the user can authenticate. The test
+// runner fails the first call and succeeds on the second.
+func TestRunSystemctlCmdEscalating_SystemScope_NonRootFallsBackToInteractiveSudo(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("test asserts non-root behavior; running as root in CI")
+	}
+	var calls []string
+	run := failFirstRunner(&calls)
+
+	if err := runSystemctlCmdEscalating(run, ScopeSystem, "daemon-reload"); err != nil {
+		t.Fatalf("runSystemctlCmdEscalating fallback: %v", err)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected exactly 2 invocations (sudo -n failed, sudo interactive succeeded), got %d: %v", len(calls), calls)
+	}
+	wantFirst := "sudo -n systemctl daemon-reload"
+	wantSecond := "sudo systemctl daemon-reload"
+	if calls[0] != wantFirst {
+		t.Errorf("first invocation = %q; want %q", calls[0], wantFirst)
+	}
+	if calls[1] != wantSecond {
+		t.Errorf("second invocation = %q; want %q (interactive fallback)", calls[1], wantSecond)
+	}
+}
+
+// TestRunSystemctlCmdEscalating_SystemScope_NonRootSurfacesBothFailures
+// verifies the error path: if both sudo -n AND interactive sudo fail, the
+// returned error references the action so the operator sees what to run
+// manually.
+func TestRunSystemctlCmdEscalating_SystemScope_NonRootSurfacesBothFailures(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("test asserts non-root behavior; running as root in CI")
+	}
+	// Runner that always fails.
+	run := func(name string, args ...string) ([]byte, error) {
+		return []byte("synthetic failure output"), os.ErrInvalid
+	}
+
+	err := runSystemctlCmdEscalating(run, ScopeSystem, "enable", "--now", "ccrouter")
+	if err == nil {
+		t.Fatalf("expected error when both sudo attempts fail")
+	}
+	msg := err.Error()
+	// The wrapped error should mention the systemctl action (so the user
+	// knows what to run by hand) and include the captured output.
+	if !strings.Contains(msg, "systemctl") {
+		t.Errorf("error should reference systemctl action; got: %q", msg)
+	}
+	if !strings.Contains(msg, "synthetic failure output") {
+		t.Errorf("error should include captured stderr/stdout; got: %q", msg)
+	}
+}
+
+// TestNeedsSudo pins down the matrix. needsSudo reads os.Geteuid() directly
+// (not injectable), so the assertions depend on the test process's euid.
+// CI typically runs as non-root, which is also the case we care about;
+// root (some Docker CI) skips the system-scope assertion.
+func TestNeedsSudo(t *testing.T) {
+	if got := needsSudo(ScopeUser); got != false {
+		t.Errorf("needsSudo(ScopeUser) = %v, want false (user scope never needs sudo)", got)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("test asserts non-root behavior; running as root in CI")
+	}
+	if got := needsSudo(ScopeSystem); got != true {
+		t.Errorf("needsSudo(ScopeSystem) under non-root = %v, want true", got)
 	}
 }
