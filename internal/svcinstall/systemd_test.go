@@ -34,6 +34,9 @@ func TestRenderUnit_SystemScope_HasHardening(t *testing.T) {
 		"NoNewPrivileges=true",
 		"ProtectSystem=strict",
 		"ReadWritePaths=/var/lib/ccrouter",
+		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
+		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
+		"Environment=HOME=/var/lib/ccrouter",
 		"WantedBy=multi-user.target",
 	}
 	for _, want := range checks {
@@ -84,6 +87,52 @@ func TestRenderUnit_CustomUser(t *testing.T) {
 	}
 	if !strings.Contains(body, "User=cliobot") || !strings.Contains(body, "Group=cliobot") {
 		t.Errorf("custom user not honored; got:\n%s", body)
+	}
+}
+
+// TestVerifyActive_Active verifies VerifyActive returns nil as soon as
+// `systemctl is-active` reports "active". Uses ScopeUser so needsSudo
+// returns false and the runner keys are predictable.
+func TestVerifyActive_Active(t *testing.T) {
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"systemctl --user is-active ccrouter": {[]byte("active\n"), nil},
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+
+	if err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 2*time.Second); err != nil {
+		t.Fatalf("VerifyActive returned error: %v", err)
+	}
+	if len(runner.calls) == 0 {
+		t.Fatalf("VerifyActive did not invoke is-active")
+	}
+}
+
+// TestVerifyActive_RestartLoop verifies VerifyActive captures journalctl
+// and systemctl status output when the unit never reaches "active" within
+// the timeout. Uses ScopeUser so the diagnostic commands run without sudo
+// and produce predictable runner keys.
+func TestVerifyActive_RestartLoop(t *testing.T) {
+	runner := &recordingRunner{
+		outputs: map[string]cannedResponse{
+			"systemctl --user is-active ccrouter":        {[]byte("activating\n"), nil},
+			"systemctl --user status ccrouter --no-pager --full": {[]byte("status: activating (auto-restart)\n"), nil},
+			"journalctl -u ccrouter -n 30 --no-pager":    {[]byte("permission denied on config.json\n"), nil},
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+
+	err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 300*time.Millisecond)
+	if err == nil {
+		t.Fatalf("VerifyActive returned nil for a service that never reached active")
+	}
+	body := err.Error()
+	if !strings.Contains(body, "permission denied on config.json") {
+		t.Errorf("error missing journal output; got: %s", body)
+	}
+	if !strings.Contains(body, "status: activating") {
+		t.Errorf("error missing status output; got: %s", body)
 	}
 }
 

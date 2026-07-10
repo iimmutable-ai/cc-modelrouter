@@ -350,16 +350,58 @@ func stripPort(hostport string) string {
 	return hostport
 }
 
-// autocertCacheDir returns ~/.cc-modelrouter/letsencrypt, creating it with
-// mode 0700 if missing. The autocert cache holds issued Let's Encrypt
-// certificates across restarts so we don't re-hit the ACME server on every
-// boot.
+// autocertCacheDir resolves the directory autocert uses to persist issued
+// Let's Encrypt certificates across restarts. Created with mode 0700 if
+// missing.
+//
+// Resolution order (first non-empty wins):
+//  1. CCROUTER_AUTOCERT_CACHE_DIR — explicit operator override.
+//  2. $CCROUTER_DATA_DIR/letsencrypt — the configured data dir, set by
+//     the start command from config. This is the path used when running
+//     under systemd where $HOME resolves to the service user's home
+//     (e.g. /var/lib/ccrouter), which is outside the unit's
+//     ReadWritePaths and would otherwise be blocked by ProtectSystem.
+//  3. ~/.cc-modelrouter/letsencrypt — the dev/local fallback, used when
+//     neither env var is set (e.g. `go run`, manual binary invocation).
+//
+// Migration: if the resolved path doesn't exist but the legacy
+// ~/.cc-modelrouter/letsencrypt does, rename it across. Avoids re-hitting
+// ACME rate limits when upgrading an install that used the old path.
 func autocertCacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	if override := os.Getenv("CCROUTER_AUTOCERT_CACHE_DIR"); override != "" {
+		if err := os.MkdirAll(override, 0o700); err != nil {
+			return "", fmt.Errorf("autocert cache dir %s: %w", override, err)
+		}
+		return override, nil
 	}
-	dir := filepath.Join(home, ".cc-modelrouter", "letsencrypt")
+
+	dataDir := os.Getenv("CCROUTER_DATA_DIR")
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dataDir = filepath.Join(home, ".cc-modelrouter")
+	}
+	dir := filepath.Join(dataDir, "letsencrypt")
+
+	// Migrate legacy path if present. Cross-device renames fail with
+	// EXDEV; on that case fall through to fresh creation rather than
+	// abandoning the cache.
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		if home != "" {
+			legacy := filepath.Join(home, ".cc-modelrouter", "letsencrypt")
+			if legacy != dir {
+				if _, lerr := os.Stat(legacy); lerr == nil {
+					if rerr := os.Rename(legacy, dir); rerr != nil {
+						logging.Warnf("[PROXY] autocert cache migration %s → %s failed: %v (will create fresh)", legacy, dir, rerr)
+					}
+				}
+			}
+		}
+	}
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

@@ -488,3 +488,62 @@ func TestValidateScopeTLSCombo_RejectsWithActionableMessage(t *testing.T) {
 		t.Errorf("rejection should suggest manual TLS mode; got: %q", reason)
 	}
 }
+
+// TestAutocertPort80InfoNote verifies the info note is returned for
+// system-scope + autocert (the now-valid combo after we added
+// AmbientCapabilities=CAP_NET_BIND_SERVICE to the unit) and empty otherwise.
+func TestAutocertPort80InfoNote(t *testing.T) {
+	tests := []struct {
+		name    string
+		scope   svcinstall.Scope
+		tlsMode string
+		want    bool
+	}{
+		{"system + autocert", svcinstall.ScopeSystem, "autocert", true},
+		{"system + manual", svcinstall.ScopeSystem, "manual", false},
+		{"user + autocert", svcinstall.ScopeUser, "autocert", false},
+		{"system + plain", svcinstall.ScopeSystem, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ans := &collectedAnswers{Scope: tt.scope, TLSMode: tt.tlsMode}
+			got := autocertPort80InfoNote(ans)
+			if (got != "") != tt.want {
+				t.Errorf("autocertPort80InfoNote() = %q, want non-empty=%v", got, tt.want)
+			}
+			if tt.want && !strings.Contains(got, ":80") {
+				t.Errorf("info note should mention :80; got: %q", got)
+			}
+		})
+	}
+}
+
+// TestFixSystemScopeOwnership_NoSudoNoCrash verifies the helper tolerates
+// the absence of sudo (common in CI). The contract is best-effort: each
+// sudo invocation that fails is logged as a warning, but the helper must
+// not panic or return an error. It must also tolerate a missing
+// shell_env.sh (the case where the operator declined all providers).
+func TestFixSystemScopeOwnership_NoSudoNoCrash(t *testing.T) {
+	tmp := t.TempDir()
+	dataDir := filepath.Join(tmp, ".cc-modelrouter")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfgPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write cfg: %v", err)
+	}
+	// Deliberately do NOT create shell_env.sh — helper must tolerate it.
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("USER", "testuser")
+
+	// Should return without panic; sudo will likely fail in CI but that
+	// is the best-effort contract. We're verifying the absence of a crash
+	// and the missing-shell_env.sh tolerance, not the chmod outcome.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("fixSystemScopeOwnership panicked: %v", r)
+		}
+	}()
+	fixSystemScopeOwnership(cfgPath, dataDir, tmp, filepath.Join(dataDir, "shell_env.sh"))
+}

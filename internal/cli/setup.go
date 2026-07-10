@@ -344,6 +344,9 @@ func confirmAndReview(p *setupprompt.Prompt, ans *collectedAnswers) bool {
 	default:
 		fmt.Println("  TLS:          Plain HTTP (NOT recommended)")
 	}
+	if note := autocertPort80InfoNote(ans); note != "" {
+		fmt.Printf("  %s\n", note)
+	}
 	scopeName := "system-level (User=ccrouter)"
 	if ans.Scope == svcinstall.ScopeUser {
 		scopeName = "user-level (current user)"
@@ -540,6 +543,14 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 	}
 	fmt.Printf("✓ Systemd unit:      %s\n", res.UnitPath)
 
+	// System scope: chown config/data files so the ccrouter service user
+	// can read them. Must run after Install because Install calls
+	// ensureSystemUser, which creates the ccrouter group that the chown
+	// depends on. Best-effort: failures are logged but non-fatal.
+	if ans.Scope == svcinstall.ScopeSystem {
+		fixSystemScopeOwnership(configPath, dataDir, homeDir, shellEnvPath)
+	}
+
 	// System scope: re-chown service.env now that the ccrouter group exists.
 	if ans.Scope == svcinstall.ScopeSystem {
 		if out, cherr := exec.Command("sudo", "chown", "root:"+svcinstall.DefaultServiceUser, serviceEnvPath).CombinedOutput(); cherr != nil {
@@ -557,6 +568,29 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 			scopeFlagManual, scopeFlagManual)
 	} else {
 		fmt.Println("✓ Service enabled + started.")
+
+		// Verify the service actually reached "active". Enable returns
+		// nil the moment systemd accepts the start transaction; a unit
+		// whose ExecStart exits 1 will restart-loop forever while Enable
+		// has already declared success. This poll through one RestartSec
+		// cycle surfaces the real failure (config perms, :80 bind, etc.)
+		// and returns non-zero so silent success is impossible.
+		fmt.Println("Verifying service is active...")
+		if verr := installer.VerifyActive(installOpts, 8*time.Second); verr != nil {
+			fmt.Fprintf(os.Stderr, "\n⚠ Service did not reach active state:\n")
+			fmt.Fprintf(os.Stderr, "%v\n\n", verr)
+			fmt.Fprintf(os.Stderr, "Common causes:\n")
+			fmt.Fprintf(os.Stderr, "  • Config file unreadable by ccrouter user — check: sudo -u ccrouter cat %s\n", configPath)
+			fmt.Fprintf(os.Stderr, "  • Port :80 bind denied (autocert) — check cloud security group allows inbound TCP :80\n")
+			fmt.Fprintf(os.Stderr, "  • Autocert cache unwritable — check: ls -la %s/letsencrypt\n", dataDir)
+			scopeFlag := ""
+			if ans.Scope == svcinstall.ScopeUser {
+				scopeFlag = "--user "
+			}
+			fmt.Fprintf(os.Stderr, "\nLive logs: journalctl %s-u ccrouter -f\n", scopeFlag)
+			return fmt.Errorf("service failed to activate: %w", verr)
+		}
+		fmt.Println("✓ Service is active.")
 	}
 
 	fmt.Println()
@@ -728,6 +762,80 @@ func validateScopeTLSCombo(ans *collectedAnswers) string {
 			"Pick system-scope, or switch TLS mode to Manual."
 	}
 	return ""
+}
+
+// autocertPort80InfoNote returns a non-blocking reminder for system-scope
+// + autocert installs. System-scope is now technically OK (the unit
+// template carries AmbientCapabilities=CAP_NET_BIND_SERVICE), but autocert
+// still requires *inbound* TCP :80 reachability for the ACME http-01
+// challenge — cloud security groups and host firewalls commonly block it
+// by default. Returns "" when not applicable. The caller prints the note
+// as a hint, not an error.
+func autocertPort80InfoNote(ans *collectedAnswers) string {
+	if ans.Scope == svcinstall.ScopeSystem && ans.TLSMode == "autocert" {
+		return "Note: autocert binds :80 for the ACME http-01 challenge — " +
+			"confirm inbound TCP :80 is allowed in your cloud security group " +
+			"and host firewall before starting the service."
+	}
+	return ""
+}
+
+// fixSystemScopeOwnership chowns the config/data files so the ccrouter
+// service user can read them. config.Save writes mode 0600 owned by the
+// invoking user (typically `admin`); the system-scope unit runs as
+// `User=ccrouter` and so cannot read /home/admin/.cc-modelrouter/config.json
+// — config.Load fails with permission denied and the service restart-loops
+// with exit 1. This step must run AFTER installer.Install, which calls
+// ensureSystemUser to create the ccrouter group — chown admin:ccrouter
+// fails before that group exists.
+//
+// All operations are sudo-wrapped and best-effort: failures are logged as
+// warnings but do not abort the install. The operator workflow is
+// preserved — admin remains the owner of every file, so
+// `vim ~/.cc-modelrouter/config.json` still works. ccrouter is added as
+// a group member gaining read access; the only group members are admin
+// (already the owner) and the ccrouter service account.
+//
+// /home/admin is chmod 0711 (not 0750) so the ccrouter user can traverse
+// into it without being able to list admin's other files.
+func fixSystemScopeOwnership(configPath, dataDir, homeDir, shellEnvPath string) {
+	invokingUser := os.Getenv("SUDO_USER")
+	if invokingUser == "" {
+		invokingUser = os.Getenv("USER")
+	}
+	if invokingUser == "" {
+		logging.Warnf("[SETUP] fixSystemScopeOwnership: could not resolve invoking user; skipping ownership fix")
+		return
+	}
+	group := svcinstall.DefaultServiceUser
+
+	type step struct {
+		desc string
+		args []string
+	}
+	steps := []step{
+		{"chown data dir", []string{"chown", "-R", invokingUser + ":" + group, dataDir}},
+		{"chmod data dir", []string{"chmod", "0750", dataDir}},
+		{"chown config", []string{"chown", invokingUser + ":" + group, configPath}},
+		{"chmod config", []string{"chmod", "0640", configPath}},
+		{"chown shell_env.sh", []string{"chown", invokingUser + ":" + group, shellEnvPath}},
+		{"chmod shell_env.sh", []string{"chmod", "0600", shellEnvPath}},
+		{"chmod home traversal", []string{"chmod", "0711", homeDir}},
+	}
+	// shell_env.sh may not exist yet on a fresh install where the user
+	// declined all providers; tolerate its absence.
+	for _, s := range steps {
+		if s.desc == "chown shell_env.sh" || s.desc == "chmod shell_env.sh" {
+			if _, err := os.Stat(shellEnvPath); err != nil {
+				continue
+			}
+		}
+		out, err := exec.Command("sudo", s.args...).CombinedOutput()
+		if err != nil {
+			logging.Warnf("[SETUP] %s failed: %s (%s)", s.desc, strings.TrimSpace(string(out)), err)
+		}
+	}
+	logging.Infof("[SETUP] ownership fixed: %s owned by %s:%s, %s chmod 0711", dataDir, invokingUser, group, homeDir)
 }
 
 // writeEnvFileForSystemd writes an env file in systemd's EnvironmentFile=

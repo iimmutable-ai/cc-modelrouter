@@ -19,6 +19,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths={{.DataDir}}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Environment=HOME={{.HomeDir}}
 PrivateTmp=true
 {{- end}}
 

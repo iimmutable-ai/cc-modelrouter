@@ -766,6 +766,77 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 	return nil
 }
 
+// VerifyActive polls `systemctl is-active` until the service reports
+// "active" or timeout elapses. Enable() returns nil the moment systemd
+// accepts the start transaction — but a unit with ExecStart that exits 1
+// will show "activating (auto-restart)" forever while restart-looping,
+// and Enable has already declared victory. This method closes that gap:
+// it waits through at least one RestartSec=5 cycle and, if the unit never
+// reaches "active", captures the last 30 journal lines plus `systemctl
+// status` so the operator sees the actual failure instead of having to
+// know to dig it out themselves.
+//
+// `timeout` should be >= RestartSec + a safety margin. The default call
+// site uses 8s against RestartSec=5. The probe interval is 500ms.
+//
+// Returns nil on "active". Returns an error wrapping the journal output
+// on any other state at timeout — "activating", "failed", "deactivating",
+// or empty (unit not found / systemctl errored). The caller is expected
+// to surface the wrapped journal text to the user and return non-zero.
+func (s SystemdInstaller) VerifyActive(opts InstallOptions, timeout time.Duration) error {
+	const serviceName = "ccrouter"
+	const pollInterval = 500 * time.Millisecond
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmdName, cmdArgs, err := buildSystemctlCommandForProd(opts.Scope, "is-active", serviceName)
+		if err != nil {
+			return fmt.Errorf("verify-active: build is-active command: %w", err)
+		}
+		out, _ := s.runner()(cmdName, cmdArgs...)
+		state := strings.TrimSpace(string(out))
+		if state == "active" {
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+
+	// Timed out — capture diagnostics. journalctl and `systemctl status`
+	// both need the same sudo escalation rules as systemctl itself for
+	// system-scope installs driven by a non-root user. We don't have a
+	// dedicated helper for journalctl, so build it inline mirroring
+	// runSystemctlCmdEscalating's sudo -n then interactive pattern.
+	journalOut := s.runCaptureEscalating(opts.Scope, "journalctl", "-u", serviceName, "-n", "30", "--no-pager")
+	statusName, statusArgs, _ := buildSystemctlCommandForProd(opts.Scope, "status", serviceName, "--no-pager", "--full")
+	statusOut, _ := s.runner()(statusName, statusArgs...)
+
+	return fmt.Errorf("service did not become active within %s — last journal lines:\n%s\n\nsystemctl status:\n%s",
+		timeout,
+		strings.TrimSpace(string(journalOut)),
+		strings.TrimSpace(string(statusOut)))
+}
+
+// runCaptureEscalating runs an arbitrary diagnostic command (journalctl,
+// systemctl status) with the same sudo escalation rules as
+// runSystemctlCmdEscalating. For ScopeSystem driven by a non-root user,
+// tries `sudo -n` then interactive sudo. For ScopeUser and actual-root,
+// runs directly. Returns combined stdout+stderr. Errors are tolerated —
+// the caller (VerifyActive) is building a diagnostic message, not making
+// a control-flow decision, so partial output is better than failing fast.
+func (s SystemdInstaller) runCaptureEscalating(scope Scope, name string, args ...string) []byte {
+	if !needsSudo(scope) {
+		out, _ := s.runner()(name, args...)
+		return out
+	}
+	sudoArgs := append([]string{"-n", name}, args...)
+	if out, err := s.runner()("sudo", sudoArgs...); err == nil {
+		return out
+	}
+	sudoArgs = append([]string{name}, args...)
+	out, _ := s.runner()("sudo", sudoArgs...)
+	return out
+}
+
 // Uninstall stops, disables, and removes the unit file. It leaves the
 // service user and data directories intact — removing users is a
 // privileged decision that belongs to the operator.

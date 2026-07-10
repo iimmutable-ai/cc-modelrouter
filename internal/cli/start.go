@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -128,6 +129,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
+	}
+
+	// Publish the data directory via env so downstream code (autocert
+	// cache, future features) resolves to the operator's data dir rather
+	// than the service user's $HOME. Under a system-scope systemd unit,
+	// $HOME resolves to /var/lib/ccrouter — outside ReadWritePaths and
+	// blocked by ProtectSystem=strict. EffectiveHomeDir honors SUDO_USER
+	// for the bare-sudo case and otherwise resolves the invoking user's
+	// home, matching what setup wrote into the unit's HOME= directive.
+	if dataHome, derr := config.EffectiveHomeDir(); derr == nil && dataHome != "" {
+		_ = os.Setenv("CCROUTER_DATA_DIR", filepath.Join(dataHome, ".cc-modelrouter"))
 	}
 
 	// Validate and set profile if specified
