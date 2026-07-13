@@ -304,31 +304,57 @@ sudo journalctl -u ccrouter -f   # tail logs
 
 Use `ccrouter gen settings` to generate a Claude Code `settings.local.json` that pre-configures the proxy URL and API key.
 
-By default the command is interactive (TTY): it prompts for deployment type (Local vs Public) and, when **Public** is chosen, detects the server's public IPv4 via `api.ipify.org` (3s timeout). Detection failure is never fatal — it falls back to `localhost`. In non-interactive sessions (piped stdin) it defaults to `localhost` and makes **no** network call. Pass `--url` or `--ip` to skip the prompt entirely (scripting/offline-friendly).
+By default the command is interactive (TTY): it prompts for deployment type — **Local**, **Domain**, or **IP** — and then for scheme (HTTPS or HTTP) when Domain or IP is selected. When **IP** is chosen, the command detects the server's public IPv4 via `api.ipify.org` (3s timeout); detection failure is never fatal — it falls back to `localhost`. In non-interactive sessions (piped stdin) it defaults to `http://localhost:8081` and makes **no** network call. Pass `--url`, `--domain`, or `--ip` to skip the prompt entirely (scripting/offline-friendly).
+
+Standard web port-elision rules apply: `https://` on port 443 and `http://` on port 80 produce URLs without an explicit `:port` suffix. All other ports are written explicitly.
 
 ```bash
-# Interactive: pick Local or Public (default Local)
+# Interactive: pick Local / Domain / IP (default Local), then scheme if Domain or IP
 ccrouter gen settings --user alice
 
 # Generate with a key directly
 ccrouter gen settings --key sk-ccr-abc123
 
-# Scripting / offline: specify the IP explicitly, no prompt
+# Domain: HTTPS by default on 443 — ideal for cloud deployment with --tls-domain
+ccrouter gen settings --domain api.example.com
+
+# Domain with custom HTTPS port
+ccrouter gen settings --domain api.example.com --port 8443
+
+# Domain served over HTTP (e.g. behind a TLS-terminating proxy on the same box)
+ccrouter gen settings --domain api.example.com --scheme http
+
+# Scripting / offline: IP explicitly, default scheme HTTP, default port 8081
 ccrouter gen settings --ip 10.0.0.5 --port 8081 --user alice
+
+# HTTPS to a raw IP (e.g. self-signed cert)
+ccrouter gen settings --ip 10.0.0.5 --scheme https --port 8443
 
 # Full URL override (highest precedence, no prompt or detection)
 ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
 ```
 
-**Flag precedence** (first match wins): `--url` → `--ip` → non-TTY localhost default → TTY interactive prompt.
+**Flag precedence** (first match wins): `--url` → `--domain` → `--ip` → non-TTY localhost default → TTY interactive prompt.
+
+**Scheme and port inference** when `--scheme` / `--port` are not set:
+
+| Flag          | Default scheme | Default port    |
+|---------------|----------------|-----------------|
+| `--domain`    | `https`        | `443`           |
+| `--ip`        | `http`         | `8081`          |
+| TTY Domain    | `https` (prompt default) | `443` (https) / `8081` (http) |
+| TTY IP        | `http` (prompt default)  | `8081` (http) / `443` (https) |
+| Local / non-TTY | `http`        | `8081`          |
 
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--url` | *(prompted)* | Full router URL (overrides prompt and detection) |
+| `--domain` | *(prompted)* | Server domain (skips prompt; defaults to HTTPS/443) |
 | `--ip` | *(prompted)* | Server IP (skips prompt and detection; offline-friendly) |
-| `-p`, `--port` | `8081` | Router port |
+| `--scheme` | *(inferred)* | URL scheme: `http` or `https` (overrides inference from `--domain`/`--ip`) |
+| `-p`, `--port` | *(inferred)* | Router port (overrides inference) |
 | `--user` | | Username to look up API key from keystore |
 | `--key` | | API key directly (overrides `--user`) |
 | `-o`, `--output` | stdout | Output file path |

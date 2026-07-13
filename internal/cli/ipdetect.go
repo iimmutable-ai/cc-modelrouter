@@ -62,59 +62,126 @@ func detectPublicIP(ctx context.Context) (string, error) {
 }
 
 // resolveServerAddress applies the flag precedence table and returns the final
-// base URL (e.g. "http://203.0.113.42:8081" or "http://localhost:8081").
+// base URL (e.g. "https://api.example.com", "http://10.0.0.5:8081", or
+// "http://localhost:8081").
 //
 // Precedence (first match wins):
-//  1. urlFlag set  → use verbatim (no prompt, no detection)
-//  2. ipFlag set   → http://<ip>:<port> (no prompt, no detection)
-//  3. stdin not a TTY → localhost:<port>, no network call
-//  4. stdin is a TTY  → prompt: [1] Local / [2] Public (detect)
-//     - Local  → localhost
-//     - Public → detectPublicIP with localhost fallback on failure,
-//                then confirm/override prompt, then port prompt
+//  1. urlFlag set     → use verbatim (no prompt, no detection)
+//  2. domainFlag set  → scheme = schemeFlag or defaultSchemeFor("domain") (https);
+//                        port = portFlag (if portExplicit) or defaultPortFor(scheme)
+//  3. ipFlag set      → scheme = schemeFlag or defaultSchemeFor("ip") (http);
+//                        port = portFlag (if portExplicit) or defaultPortFor(scheme)
+//  4. stdin not a TTY → http://localhost:<port>, no network call
+//  5. stdin is a TTY  → 3-option prompt: Local / Domain / IP
+//     - Local  → localhost, http, no scheme prompt
+//     - Domain → scheme prompt (default https), FQDN prompt
+//     - IP     → scheme prompt (default http), detectPublicIP + confirm
+//     Then a port prompt whose default depends on the resolved scheme.
+//
+// portFlag is the value of the --port flag; portExplicit is whether the user
+// actually passed --port (from cmd.Flags().Changed("port")). When portExplicit
+// is false, the default port for the resolved scheme is used instead.
 //
 // Detection failures are never fatal. The only error path is prompt I/O failure.
-func resolveServerAddress(urlFlag, ipFlag string, port int, in io.Reader, out io.Writer) (string, error) {
+func resolveServerAddress(urlFlag, ipFlag, domainFlag, schemeFlag string, portFlag int, portExplicit bool, in io.Reader, out io.Writer) (string, error) {
 	// 1. --url overrides everything.
 	if urlFlag != "" {
 		return urlFlag, nil
 	}
 
-	// 2. --ip skips prompt and detection (scripting / offline path).
-	if ipFlag != "" {
-		return fmt.Sprintf("http://%s:%d", ipFlag, port), nil
+	// 2. --domain skips prompt and detection.
+	if domainFlag != "" {
+		scheme := schemeFlag
+		if scheme == "" {
+			scheme = defaultSchemeFor("domain")
+		}
+		port := defaultPortFor(scheme)
+		if portExplicit {
+			port = portFlag
+		}
+		return buildBaseURL(scheme, stripSchemePrefix(domainFlag), port), nil
 	}
 
-	// 3. Non-TTY: default to localhost, no network call, one-line summary.
+	// 3. --ip skips prompt and detection.
+	if ipFlag != "" {
+		scheme := schemeFlag
+		if scheme == "" {
+			scheme = defaultSchemeFor("ip")
+		}
+		port := defaultPortFor(scheme)
+		if portExplicit {
+			port = portFlag
+		}
+		return buildBaseURL(scheme, ipFlag, port), nil
+	}
+
+	// 4. Non-TTY: default to localhost, no network call, one-line summary.
 	if !isTTYFn() {
 		fmt.Fprintf(out, "Using server IP: localhost (local)\n")
-		return fmt.Sprintf("http://localhost:%d", port), nil
+		port := 8081
+		if portExplicit {
+			port = portFlag
+		}
+		return buildBaseURL("http", "localhost", port), nil
 	}
 
-	// 4. TTY: prompt deployment type.
+	// 5. TTY: prompt deployment type.
 	reader := bufio.NewReader(in)
 
-	host, err := promptDeploymentType(reader, out)
+	choice, err := promptDeploymentType(reader, out)
 	if err != nil {
 		return "", err
 	}
 
-	// Prompt port (default = port flag value).
-	finalPort, err := promptPort(reader, out, port)
+	scheme := defaultSchemeFor(choice)
+	if choice != "local" {
+		// Pre-select the inferred scheme in the menu.
+		defaultChoice := "1" // HTTPS
+		if scheme == "http" {
+			defaultChoice = "2"
+		}
+		scheme, err = promptScheme(reader, out, defaultChoice)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var host string
+	switch choice {
+	case "local":
+		host = "localhost"
+	case "domain":
+		host, err = promptDomain(reader, out)
+		if err != nil {
+			return "", err
+		}
+	case "ip":
+		host, err = promptPublicIP(reader, out)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	portDefault := defaultPortFor(scheme)
+	if portExplicit {
+		portDefault = portFlag
+	}
+	finalPort, err := promptPort(reader, out, portDefault)
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("http://%s:%d", host, finalPort), nil
+	return buildBaseURL(scheme, host, finalPort), nil
 }
 
-// promptDeploymentType asks the user to pick local vs public and returns the
-// resolved host string. For "Public", detection failure falls back to localhost.
+// promptDeploymentType asks the user to pick local / domain / ip and returns
+// the canonical choice token.
 func promptDeploymentType(reader *bufio.Reader, out io.Writer) (string, error) {
 	for {
 		fmt.Fprintln(out, "Deployment type:")
-		fmt.Fprintln(out, "  1) Local (localhost — same machine only)")
-		fmt.Fprintln(out, "  2) Public  (remote server — detect public IP)")
+		fmt.Fprintln(out, "  1) Local    (localhost — same machine only)")
+		fmt.Fprintln(out, "  2) Domain   (e.g. api.example.com)")
+		fmt.Fprintln(out, "  3) IP       (remote server — detect public IP)")
 		fmt.Fprint(out, "Select [1]: ")
 
 		line, err := reader.ReadString('\n')
@@ -125,13 +192,79 @@ func promptDeploymentType(reader *bufio.Reader, out io.Writer) (string, error) {
 
 		switch choice {
 		case "", "1":
-			return "localhost", nil
+			return "local", nil
 		case "2":
-			return promptPublicIP(reader, out)
+			return "domain", nil
+		case "3":
+			return "ip", nil
+		default:
+			fmt.Fprintln(out, "Invalid choice; please enter 1, 2, or 3.")
+		}
+	}
+}
+
+// promptScheme asks for http vs https. defaultChoice ("1" or "2") is the
+// pre-selected option shown in the prompt — Domain defaults to HTTPS, IP to HTTP.
+func promptScheme(reader *bufio.Reader, out io.Writer, defaultChoice string) (string, error) {
+	for {
+		fmt.Fprintln(out, "Scheme:")
+		fmt.Fprintln(out, "  1) HTTPS")
+		fmt.Fprintln(out, "  2) HTTP")
+		fmt.Fprintf(out, "Select [%s]: ", defaultChoice)
+
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return "", fmt.Errorf("failed to read scheme choice: %w", err)
+		}
+		choice := strings.TrimSpace(line)
+
+		switch choice {
+		case "":
+			// Empty input → accept the shown default.
+			if defaultChoice == "2" {
+				return "http", nil
+			}
+			return "https", nil
+		case "1":
+			return "https", nil
+		case "2":
+			return "http", nil
 		default:
 			fmt.Fprintln(out, "Invalid choice; please enter 1 or 2.")
 		}
 	}
+}
+
+// promptDomain asks for the FQDN. Strips any accidental scheme prefix the user
+// might have typed and validates non-empty.
+func promptDomain(reader *bufio.Reader, out io.Writer) (string, error) {
+	for {
+		fmt.Fprint(out, "Domain name (e.g. api.example.com): ")
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return "", fmt.Errorf("failed to read domain name: %w", err)
+		}
+		domain := stripSchemePrefix(strings.TrimSpace(line))
+		if domain == "" {
+			fmt.Fprintln(out, "Domain cannot be empty; please try again.")
+			continue
+		}
+		return domain, nil
+	}
+}
+
+// stripSchemePrefix removes a leading http:// or https:// (case-insensitive)
+// from a host string the user might have typed. Returns the input unchanged if
+// no prefix is present.
+func stripSchemePrefix(host string) string {
+	lower := strings.ToLower(host)
+	switch {
+	case strings.HasPrefix(lower, "https://"):
+		return host[len("https://"):]
+	case strings.HasPrefix(lower, "http://"):
+		return host[len("http://"):]
+	}
+	return host
 }
 
 // promptPublicIP detects the public IP, then offers a confirm/override loop.

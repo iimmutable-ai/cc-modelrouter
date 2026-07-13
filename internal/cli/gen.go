@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/iimmutable-ai/cc-modelrouter/internal/auth"
@@ -22,7 +23,7 @@ func NewGenCommand() *cobra.Command {
 
 // NewGenSettingsCommand creates the gen settings command.
 func NewGenSettingsCommand() *cobra.Command {
-	var url, ip, user, key, output string
+	var urlFlag, ipFlag, domainFlag, schemeFlag, user, key, output string
 	var port int
 
 	cmd := &cobra.Command{
@@ -33,25 +34,34 @@ Claude Code to use the ccrouter proxy.
 
 The output uses Claude Code's env format with attribution disabled.
 
-By default the command prompts for deployment type (local vs public) and
-detects the server's public IP when "Public" is chosen. Pass --url or --ip
-to skip the prompt (scripting-friendly); in non-interactive sessions the
+By default the command prompts for deployment type (local / domain / public IP)
+and detects the server's public IP when "IP" is chosen. Pass --url, --domain,
+or --ip to skip the prompt (scripting-friendly); in non-interactive sessions the
 command defaults to localhost with no network call.
+
+When --domain or --ip is used, the scheme is inferred (https for domains, http
+for IPs). Override with --scheme. Standard web port-elision rules apply: https
+on 443 and http on 80 produce URLs without an explicit port.
 
 Examples:
   ccrouter gen settings --user alice
-  ccrouter gen settings --key sk-ccr-abc123
-  ccrouter gen settings --ip 10.0.0.5 --port 8081    # offline / scripting
+  ccrouter gen settings --domain api.example.com                   # HTTPS, port 443
+  ccrouter gen settings --domain api.example.com --port 8443       # custom HTTPS port
+  ccrouter gen settings --ip 10.0.0.5                              # HTTP, port 8081
+  ccrouter gen settings --ip 10.0.0.5 --scheme https --port 8443   # HTTPS to raw IP
   ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			port, _ := cmd.Flags().GetInt("port")
-			return runGenSettings(url, ip, port, user, key, output)
+			portExplicit := cmd.Flags().Changed("port")
+			return runGenSettings(urlFlag, ipFlag, domainFlag, schemeFlag, port, portExplicit, user, key, output)
 		},
 	}
 
-	cmd.Flags().StringVar(&url, "url", "", "Full router URL (overrides prompt and detection)")
-	cmd.Flags().StringVar(&ip, "ip", "", "Server IP (skips prompt and detection; offline-friendly)")
+	cmd.Flags().StringVar(&urlFlag, "url", "", "Full router URL (overrides prompt and detection)")
+	cmd.Flags().StringVar(&domainFlag, "domain", "", "Server domain (e.g. api.example.com; skips prompt and detection, defaults to HTTPS/443)")
+	cmd.Flags().StringVar(&ipFlag, "ip", "", "Server IP (skips prompt and detection; offline-friendly, defaults to HTTP/8081)")
+	cmd.Flags().StringVar(&schemeFlag, "scheme", "", "URL scheme: http or https (default: inferred from --domain/--ip)")
 	cmd.Flags().IntVarP(&port, "port", "p", 8081, "Router port")
 	cmd.Flags().StringVar(&user, "user", "", "Username to look up API key from keystore")
 	cmd.Flags().StringVar(&key, "key", "", "API key directly (overrides --user)")
@@ -60,24 +70,24 @@ Examples:
 	return cmd
 }
 
-func runGenSettings(urlFlag, ipFlag string, port int, user, key, output string) error {
-	// Resolve the base URL: honor --url / --ip overrides, prompt only on TTY,
-	// never make a network call unless the user explicitly picks "Public".
-	baseURL, err := resolveServerAddress(urlFlag, ipFlag, port, os.Stdin, os.Stdout)
+func runGenSettings(urlFlag, ipFlag, domainFlag, schemeFlag string, port int, portExplicit bool, user, key, output string) error {
+	if err := validateSchemeFlag(schemeFlag); err != nil {
+		return err
+	}
+
+	// Resolve the base URL: honor --url / --domain / --ip overrides, prompt only
+	// on TTY, never make a network call unless the user explicitly picks "IP".
+	baseURL, err := resolveServerAddress(urlFlag, ipFlag, domainFlag, schemeFlag, port, portExplicit, os.Stdin, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("failed to resolve server address: %w", err)
 	}
 
-	// Warn when the generated settings target a non-local address: the ccrouter
-	// server defaults to binding loopback, so a public/remote URL will produce
-	// ConnectionRefused at the client unless the server is reconfigured. Emitted
-	// to stderr so stdout JSON piping is unaffected.
+	// Warn when the generated settings target a non-local address. The HTTP path
+	// keeps the stern "server must bind 0.0.0.0" warning; HTTPS softens it since
+	// the user has clearly set up TLS deliberately. Emitted to stderr so stdout
+	// JSON piping is unaffected.
 	if !isLocalHostURL(baseURL) {
-		fmt.Fprintf(os.Stderr, "WARNING: Generated settings target a non-local address (%s).\n", baseURL)
-		fmt.Fprintln(os.Stderr, `  For the client to connect, the ccrouter server MUST bind to 0.0.0.0:
-    ccrouter start --host 0.0.0.0 --port 8081
-  or set "server": {"host": "0.0.0.0"} in ~/.cc-modelrouter/config.json on the server.
-  Also allow inbound TCP on the port in the cloud security group and any in-VM firewall.`)
+		emitNonLocalWarning(baseURL)
 	}
 
 	// Resolve the API key
@@ -134,4 +144,38 @@ func runGenSettings(urlFlag, ipFlag string, port int, user, key, output string) 
 	}
 
 	return nil
+}
+
+// validateSchemeFlag returns an error if --scheme was set to anything other
+// than http or https. Empty string (user did not pass the flag) is valid.
+func validateSchemeFlag(scheme string) error {
+	switch scheme {
+	case "", "http", "https":
+		return nil
+	default:
+		return fmt.Errorf("--scheme must be \"http\" or \"https\", got %q", scheme)
+	}
+}
+
+// emitNonLocalWarning prints deployment guidance for non-local target URLs.
+// HTTPS targets get a softer note (the user has TLS set up); HTTP targets get
+// the stern "bind 0.0.0.0" warning since plaintext-to-a-remote-host is rarely
+// intentional in production.
+func emitNonLocalWarning(baseURL string) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return
+	}
+	switch u.Scheme {
+	case "https":
+		fmt.Fprintf(os.Stderr, "NOTE: Generated settings target a remote HTTPS server (%s).\n", baseURL)
+		fmt.Fprintln(os.Stderr, `  Ensure the server is running with --tls-domain or --tls-cert/--tls-key,
+  and that ports 443 (and 80 for ACME/redirect) are open in the cloud security group.`)
+	default:
+		fmt.Fprintf(os.Stderr, "WARNING: Generated settings target a non-local address (%s).\n", baseURL)
+		fmt.Fprintln(os.Stderr, `  For the client to connect, the ccrouter server MUST bind to 0.0.0.0:
+    ccrouter start --host 0.0.0.0 --port 8081
+  or set "server": {"host": "0.0.0.0"} in ~/.cc-modelrouter/config.json on the server.
+  Also allow inbound TCP on the port in the cloud security group and any in-VM firewall.`)
+	}
 }

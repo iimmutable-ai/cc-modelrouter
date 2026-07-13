@@ -361,34 +361,56 @@ ccrouter gen settings [flags]
 
 **Description:**
 - Generates a Claude Code `settings.local.json` / `settings.json` that points Claude Code at the router proxy and disables attribution
-- Interactive (TTY) by default: prompts for deployment type (**Local** vs **Public**)
-- When **Public** is chosen, detects the server's public IPv4 via `api.ipify.org` (3s timeout); detection failure falls back to `localhost` (never fatal)
-- Non-interactive (piped stdin): defaults to `localhost` with **no** network call
-- `--url` or `--ip` skips the prompt entirely (scripting / offline-friendly)
+- Interactive (TTY) by default: prompts for deployment type — **Local**, **Domain**, or **IP** — and then for scheme (HTTPS or HTTP) when Domain or IP is selected
+- When **IP** is chosen, detects the server's public IPv4 via `api.ipify.org` (3s timeout); detection failure falls back to `localhost` (never fatal)
+- Non-interactive (piped stdin): defaults to `http://localhost:8081` with **no** network call
+- `--url`, `--domain`, or `--ip` skips the prompt entirely (scripting / offline-friendly)
+- Standard web port-elision rules apply: `https` on 443 and `http` on 80 produce URLs without an explicit `:port` suffix
 - API key resolved from `--key` (direct) or `--user` (keystore lookup)
 
-**Flag precedence** (first match wins): `--url` → `--ip` → non-TTY localhost default → TTY interactive prompt.
+**Flag precedence** (first match wins): `--url` → `--domain` → `--ip` → non-TTY localhost default → TTY interactive prompt.
+
+**Scheme and port inference** when `--scheme` / `--port` are not set:
+
+| Input          | Default scheme          | Default port              |
+|----------------|-------------------------|---------------------------|
+| `--domain`     | `https`                 | `443`                     |
+| `--ip`         | `http`                  | `8081`                    |
+| TTY Domain     | `https` (prompt default) | `443` (https) / `8081` (http) |
+| TTY IP         | `http` (prompt default)  | `8081` (http) / `443` (https)  |
+| Local / non-TTY | `http`                 | `8081`                    |
 
 **Flags:**
 ```
-      --url string        Full router URL (overrides prompt and detection)
-      --ip string         Server IP (skips prompt and detection; offline-friendly)
-  -p, --port int          Router port (default 8081)
-      --user string       Username to look up API key from keystore
-      --key string        API key directly (overrides --user)
-  -o, --output string     Output file path (default: stdout)
+      --domain string   Server domain (e.g. api.example.com; skips prompt and detection, defaults to HTTPS/443)
+      --ip string       Server IP (skips prompt and detection; offline-friendly, defaults to HTTP/8081)
+      --key string      API key directly (overrides --user)
+  -o, --output string   Output file path (default: stdout)
+  -p, --port int        Router port (default 8081)
+      --scheme string   URL scheme: http or https (default: inferred from --domain/--ip)
+      --url string      Full router URL (overrides prompt and detection)
+      --user string     Username to look up API key from keystore
 ```
 
 **Examples:**
 ```bash
-# Interactive: pick Local or Public (default Local)
+# Interactive: pick Local / Domain / IP (default Local), then scheme if Domain or IP
 ccrouter gen settings --user alice
 
 # Generate with a key directly
 ccrouter gen settings --key sk-ccr-abc123
 
-# Scripting / offline: specify the IP explicitly, no prompt
+# Domain: HTTPS by default on 443 — ideal for cloud deployment with --tls-domain
+ccrouter gen settings --domain api.example.com
+
+# Domain with custom HTTPS port
+ccrouter gen settings --domain api.example.com --port 8443
+
+# Scripting / offline: IP explicitly, default scheme HTTP, default port 8081
 ccrouter gen settings --ip 10.0.0.5 --port 8081 --user alice
+
+# HTTPS to a raw IP (e.g. self-signed cert)
+ccrouter gen settings --ip 10.0.0.5 --scheme https --port 8443
 
 # Full URL override, write to a project-local file
 ccrouter gen settings --url http://myserver:8081 -o .claude/settings.local.json
