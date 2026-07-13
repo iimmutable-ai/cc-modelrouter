@@ -767,58 +767,99 @@ func (s SystemdInstaller) Enable(opts InstallOptions, unitPath string) error {
 }
 
 // VerifyActive polls `systemctl is-active` until the service reports
-// "active" or timeout elapses. Enable() returns nil the moment systemd
-// accepts the start transaction — but a unit with ExecStart that exits 1
-// will show "activating (auto-restart)" forever while restart-looping,
-// and Enable has already declared victory. This method closes that gap:
-// it waits through at least one RestartSec=5 cycle and, if the unit never
+// "active" continuously for `verifyActiveHoldSeconds` with a stable
+// NRestarts count. Enable() returns nil the moment systemd accepts the
+// start transaction — but a unit with ExecStart that exits 1 will show
+// "activating (auto-restart)" forever while restart-looping, and Enable
+// has already declared victory. This method closes that gap: it waits
+// through at least one RestartSec=5 cycle and, if the unit never
 // reaches "active", captures the last 30 journal lines plus `systemctl
 // status` so the operator sees the actual failure instead of having to
 // know to dig it out themselves.
 //
-// `timeout` should be >= RestartSec + a safety margin. The default call
-// site uses 8s against RestartSec=5. The probe interval is 500ms.
+// Tolerant of a single restart-and-recover within the window: a service
+// that crashes on the first ExecStart (e.g. freshly-created system
+// user's supplementary group membership not yet visible to systemd's
+// first fork) and then succeeds via Restart=always is considered
+// healthy, because it sustains active with a stable NRestarts count.
+// A genuine crash-loop — NRestarts increments more than
+// `maxRestartsDuringWindow` times, or the service never sustains
+// active — still fails.
 //
-// Returns nil on "active". Returns an error wrapping the journal output
-// on any other state at timeout — "activating", "failed", "deactivating",
-// or empty (unit not found / systemctl errored). The caller is expected
-// to surface the wrapped journal text to the user and return non-zero.
+// `timeout` should be >= RestartSec + a safety margin. The default call
+// site uses 20s against RestartSec=5. The probe interval is 500ms.
+//
+// Returns nil on sustained active with stable restart count. Returns
+// an error wrapping the journal output on timeout or crash-loop —
+// "activating", "failed", "deactivating", or empty (unit not found /
+// systemctl errored). The caller is expected to surface the wrapped
+// journal text to the user and return non-zero.
+//
 // verifyActiveHoldSeconds is the duration `is-active` must continuously
-// report "active" before VerifyActive declares the service healthy.
-// Defaults to 3s so a Type=simple unit that forks, reports active, then
-// crashes within one RestartSec=5 cycle is caught by the hold rather
-// than falsely declared healthy on the first sample. Exposed as a var
-// (not a const) so tests can shrink it to keep the suite fast.
+// report "active" — with no NRestarts increment in between — before
+// VerifyActive declares the service healthy. Defaults to 3s so a
+// Type=simple unit that forks, reports active, then crashes within one
+// RestartSec=5 cycle is caught by the hold rather than falsely
+// declared healthy on the first sample. Exposed as a var (not a const)
+// so tests can shrink it to keep the suite fast.
 var verifyActiveHoldSeconds = 3 * time.Second
+
+// maxRestartsDuringWindow is the number of NRestarts increments
+// tolerated within a single VerifyActive window. A single
+// restart-and-recover (e.g. first-ExecStart permission issues resolved
+// by group-cache refresh on the retry) is benign; two or more indicates
+// a real crash-loop and must fail the gate. Exposed as a var so tests
+// can manipulate it.
+var maxRestartsDuringWindow = 1
 
 func (s SystemdInstaller) VerifyActive(opts InstallOptions, timeout time.Duration) error {
 	const serviceName = "ccrouter"
 	const pollInterval = 500 * time.Millisecond
 
 	deadline := time.Now().Add(timeout)
-	sawActive := false
-	var holdUntil time.Time
+	// prevRestarts tracks the last-seen NRestarts value so we can detect
+	// increments (each increment = one systemd-triggered restart).
+	// -1 sentinel so the first sample never counts as an increment.
+	prevRestarts := -1
+	restartsDuringWindow := 0
+	var holdStart time.Time
 	for time.Now().Before(deadline) {
+		nRaw := strings.TrimSpace(string(s.nRestarts(opts, serviceName)))
+		curRestarts := -1
+		if n, err := strconv.Atoi(nRaw); err == nil {
+			curRestarts = n
+		}
+
+		// Detect NRestarts increments regardless of current state — a
+		// crash-and-recover will tick NRestarts even while we briefly
+		// observe "active" on the next sample.
+		if prevRestarts >= 0 && curRestarts >= 0 && curRestarts > prevRestarts {
+			restartsDuringWindow += curRestarts - prevRestarts
+			// Any restart invalidates the sustained-active window: a
+			// fresh crash just happened, so any hold we were building
+			// is no longer "sustained". Require a new hold to start.
+			holdStart = time.Time{}
+			if restartsDuringWindow > maxRestartsDuringWindow {
+				break // genuine crash-loop — surface diagnostics
+			}
+		}
+		if curRestarts >= 0 {
+			prevRestarts = curRestarts
+		}
+
 		state := s.isActiveState(opts, serviceName)
 		if state == "active" {
-			if !sawActive {
-				sawActive = true
-				holdUntil = time.Now().Add(verifyActiveHoldSeconds)
+			if holdStart.IsZero() {
+				holdStart = time.Now()
 			}
-			// While holding, sample NRestarts. A non-zero count means
-			// the service has already crashed and been restarted by
-			// systemd since Enable() — a crash-loop even though the
-			// current sample is "active".
-			if n := strings.TrimSpace(string(s.nRestarts(opts, serviceName))); n != "" && n != "0" {
-				break
+			if time.Since(holdStart) >= verifyActiveHoldSeconds {
+				return nil // sustained active for the full hold with no restarts in between
 			}
-			if time.Now().After(holdUntil) {
-				return nil // sustained active for the full hold with zero restarts
-			}
-		} else if sawActive {
-			// Left "active" during the hold — service crashed. Stop
-			// waiting; diagnostics below will show why.
-			break
+		} else {
+			// Left "active" (or never reached it) — reset the hold. The
+			// service may still recover via Restart=always, so keep
+			// polling until deadline unless we exceed the restart cap.
+			holdStart = time.Time{}
 		}
 		time.Sleep(pollInterval)
 	}

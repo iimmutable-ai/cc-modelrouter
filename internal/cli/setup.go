@@ -576,7 +576,7 @@ func applyAnswers(ans *collectedAnswers, dryRun bool, configPathOverride string)
 		// cycle surfaces the real failure (config perms, :80 bind, etc.)
 		// and returns non-zero so silent success is impossible.
 		fmt.Println("Verifying service is active...")
-		if verr := installer.VerifyActive(installOpts, 12*time.Second); verr != nil {
+		if verr := installer.VerifyActive(installOpts, 20*time.Second); verr != nil {
 			fmt.Fprintf(os.Stderr, "\n⚠ Service did not reach active state:\n")
 			fmt.Fprintf(os.Stderr, "%v\n\n", verr)
 			fmt.Fprintf(os.Stderr, "Common causes:\n")

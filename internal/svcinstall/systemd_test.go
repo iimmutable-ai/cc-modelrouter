@@ -2,6 +2,7 @@ package svcinstall
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -192,16 +193,25 @@ func TestVerifyActive_BriefActiveThenCrash(t *testing.T) {
 	}
 }
 
-// TestVerifyActive_RestartLoopDetectedViaNRestarts verifies that even
-// when is-active returns "active" continuously, a non-zero NRestarts
-// count from `systemctl show` triggers an error. This catches tight
-// crash-loops where systemd happens to report "active" on every sample
-// because RestartSec is very short.
+// TestVerifyActive_RestartLoopDetectedViaNRestarts verifies that a
+// genuine crash-loop — NRestarts increments more than
+// maxRestartsDuringWindow times within the polling window — fails the
+// gate even when is-active reports "active" on every sample. Catches
+// tight crash-loops where systemd happens to report "active" because
+// RestartSec is very short relative to the poll interval.
 func TestVerifyActive_RestartLoopDetectedViaNRestarts(t *testing.T) {
 	origHold := verifyActiveHoldSeconds
 	verifyActiveHoldSeconds = 10 * time.Second // longer than timeout so NRestarts is the only exit path
 	t.Cleanup(func() { verifyActiveHoldSeconds = origHold })
 
+	origMax := maxRestartsDuringWindow
+	maxRestartsDuringWindow = 1
+	t.Cleanup(func() { maxRestartsDuringWindow = origMax })
+
+	// NRestarts increments on every poll: 0,1,2,3,... The second
+	// increment (restartsDuringWindow=2) exceeds maxRestartsDuringWindow=1
+	// and trips the failure path.
+	restartCount := -1
 	runner := &statefulRunner{
 		respond: func(name string, args ...string) ([]byte, error) {
 			key := name + " " + strings.Join(args, " ")
@@ -209,7 +219,8 @@ func TestVerifyActive_RestartLoopDetectedViaNRestarts(t *testing.T) {
 			case strings.Contains(key, "is-active ccrouter"):
 				return []byte("active\n"), nil
 			case strings.Contains(key, "show") && strings.Contains(key, "NRestarts"):
-				return []byte("2\n"), nil
+				restartCount++
+				return []byte(fmt.Sprintf("%d\n", restartCount)), nil
 			case strings.Contains(key, "status ccrouter"):
 				return []byte("status: active (running)\n"), nil
 			case strings.Contains(key, "journalctl"):
@@ -222,10 +233,74 @@ func TestVerifyActive_RestartLoopDetectedViaNRestarts(t *testing.T) {
 
 	err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 2*time.Second)
 	if err == nil {
-		t.Fatalf("VerifyActive returned nil despite NRestarts=2 (crash-loop)")
+		t.Fatalf("VerifyActive returned nil despite NRestarts incrementing past maxRestartsDuringWindow (crash-loop)")
 	}
 	if !strings.Contains(err.Error(), "restart detected") {
 		t.Errorf("error should include journal output; got: %s", err.Error())
+	}
+}
+
+// TestVerifyActive_SingleRestartThenRecovery verifies the user's host
+// scenario: the first ExecStart crashes (permission denied on config
+// because the freshly-created ccrouter system user's group membership
+// isn't visible to systemd's first fork), then Restart=always recovers
+// within ~RestartSec=5. VerifyActive must declare success once the
+// service sustains active for the hold with NRestarts stable at the
+// new (incremented) value.
+func TestVerifyActive_SingleRestartThenRecovery(t *testing.T) {
+	origHold := verifyActiveHoldSeconds
+	verifyActiveHoldSeconds = 200 * time.Millisecond
+	t.Cleanup(func() { verifyActiveHoldSeconds = origHold })
+
+	origMax := maxRestartsDuringWindow
+	maxRestartsDuringWindow = 1
+	t.Cleanup(func() { maxRestartsDuringWindow = origMax })
+
+	// State trajectory: starts at "activating" (first ExecStart crashed),
+	// NRestarts ticks 0→1 once (systemd-triggered restart), then state
+	// transitions to "active" and holds. VerifyActive must observe the
+	// NRestarts increment (resetting the hold), then build a fresh hold
+	// once "active" is reached and return nil.
+	steps := []struct {
+		state     string
+		nRestarts int
+	}{
+		{"activating", 0}, // first ExecStart crashed; polling for recovery
+		{"activating", 0}, // still within RestartSec=5 window
+		{"activating", 1}, // systemd has now restarted the service
+		{"active", 1},     // second attempt succeeded
+		{"active", 1},     // sustained active, hold accumulating
+		{"active", 1},     // hold completes
+	}
+	idx := 0
+	runner := &statefulRunner{
+		respond: func(name string, args ...string) ([]byte, error) {
+			key := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(key, "is-active ccrouter"):
+				if idx >= len(steps) {
+					return []byte("active\n"), nil
+				}
+				return []byte(steps[idx].state + "\n"), nil
+			case strings.Contains(key, "show") && strings.Contains(key, "NRestarts"):
+				n := 1
+				if idx < len(steps) {
+					n = steps[idx].nRestarts
+				}
+				idx++
+				return []byte(fmt.Sprintf("%d\n", n)), nil
+			case strings.Contains(key, "status ccrouter"):
+				return []byte("status: active (running)\n"), nil
+			case strings.Contains(key, "journalctl"):
+				return []byte("permission denied on first start\n"), nil
+			}
+			return []byte{}, nil
+		},
+	}
+	s := SystemdInstaller{run: runner.run}
+
+	if err := s.VerifyActive(InstallOptions{Scope: ScopeUser}, 5*time.Second); err != nil {
+		t.Fatalf("VerifyActive returned error for a service that recovered after a single restart: %v", err)
 	}
 }
 
