@@ -7,19 +7,44 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 )
 
 // withStubs snapshots the current test seam values, applies overrides, and
-// restores them when the test ends. Keeps tests isolated.
+// restores them when the test ends. Keeps tests isolated. Config loading
+// is always stubbed to "no config" so the developer's real config never
+// leaks into tests.
 func withStubs(t *testing.T, ipFn func(context.Context) (string, error), tty bool) {
 	t.Helper()
-	prevIP, prevTTYFn := detectPublicIPFn, isTTYFn
+	prevIP, prevTTYFn, prevCfg := detectPublicIPFn, isTTYFn, loadGlobalConfigFn
 	detectPublicIPFn = ipFn
 	isTTYFn = func() bool { return tty }
+	loadGlobalConfigFn = func() (*config.Config, error) {
+		return nil, errors.New("no config (test)")
+	}
 	t.Cleanup(func() {
 		detectPublicIPFn = prevIP
 		isTTYFn = prevTTYFn
+		loadGlobalConfigFn = prevCfg
 	})
+}
+
+// withConfigStub overrides loadGlobalConfigFn to return the provided config.
+// Pass nil to simulate "no config found".
+func withConfigStub(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	prevCfg := loadGlobalConfigFn
+	if cfg == nil {
+		loadGlobalConfigFn = func() (*config.Config, error) {
+			return nil, errors.New("no config (test)")
+		}
+	} else {
+		loadGlobalConfigFn = func() (*config.Config, error) {
+			return cfg, nil
+		}
+	}
+	t.Cleanup(func() { loadGlobalConfigFn = prevCfg })
 }
 
 func TestDetectPublicIP_Live(t *testing.T) {
@@ -390,5 +415,243 @@ func TestResolveServerAddress_PortExplicitOnNonTTY(t *testing.T) {
 	}
 	if want := "http://localhost:9999"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// --- Config auto-detect tests ---
+
+func TestResolveServerAddress_ConfigDetect_NonTTY_HTTP(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "localhost", Port: 8081},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called when config provides address")
+		return "", nil
+	}, false)
+	withConfigStub(t, cfg)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "http://localhost:8081"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_ConfigDetect_NonTTY_Autocert(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 8443,
+			TLS: &config.TLSConfig{Domain: "ccrouter.example.com"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called")
+		return "", nil
+	}, false)
+	withConfigStub(t, cfg)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "https://ccrouter.example.com:8443"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_ConfigDetect_NonTTY_Autocert_DefaultPort(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 443,
+			TLS: &config.TLSConfig{Domain: "ccrouter.example.com"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called")
+		return "", nil
+	}, false)
+	withConfigStub(t, cfg)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "https://ccrouter.example.com"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_ConfigDetect_NonTTY_ManualTLS(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 8443,
+			TLS: &config.TLSConfig{CertFile: "/etc/ssl/cert.pem", KeyFile: "/etc/ssl/key.pem"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called")
+		return "", nil
+	}, false)
+	withConfigStub(t, cfg)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Host 0.0.0.0 → localhost; TLS manual → https
+	if want := "https://localhost:8443"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_ConfigDetect_NonTTY_PortExplicit(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 8443,
+			TLS: &config.TLSConfig{Domain: "ccrouter.example.com"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called")
+		return "", nil
+	}, false)
+	withConfigStub(t, cfg)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	// --port 9000 explicit overrides config port 8443
+	got, err := resolveServerAddress("", "", "", "", 9000, true, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "https://ccrouter.example.com:9000"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_ConfigDetect_TTY_Accept(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 8443,
+			TLS: &config.TLSConfig{Domain: "ccrouter.example.com"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called when config accepted")
+		return "", nil
+	}, true)
+	withConfigStub(t, cfg)
+
+	in := strings.NewReader("y\n")
+	var out bytes.Buffer
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "https://ccrouter.example.com:8443"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if !strings.Contains(out.String(), "Detected server from config") {
+		t.Errorf("expected detection message in output, got %q", out.String())
+	}
+}
+
+func TestResolveServerAddress_ConfigDetect_TTY_Reject(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 8443,
+			TLS: &config.TLSConfig{Domain: "ccrouter.example.com"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called when Local chosen after reject")
+		return "", nil
+	}, true)
+	withConfigStub(t, cfg)
+
+	// "n\n" rejects detected, "1\n" picks Local, "\n" accepts port default.
+	in := strings.NewReader("n\n1\n\n")
+	var out bytes.Buffer
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "http://localhost:8081"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_NoConfig_FallsThrough(t *testing.T) {
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called on non-TTY")
+		return "", nil
+	}, false)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	got, err := resolveServerAddress("", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "http://localhost:8081"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerAddress_FlagsOverrideConfig(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host: "0.0.0.0", Port: 8443,
+			TLS: &config.TLSConfig{Domain: "ccrouter.example.com"},
+		},
+	}
+	withStubs(t, func(context.Context) (string, error) {
+		t.Fatal("detectPublicIPFn must not be called when --url is set")
+		return "", nil
+	}, true)
+	withConfigStub(t, cfg)
+
+	var out bytes.Buffer
+	in := &bytes.Buffer{}
+	got, err := resolveServerAddress("http://override:9999", "", "", "", 8081, false, in, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "http://override:9999"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDetectServerFromConfig_NilOnZeroPort(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "0.0.0.0", Port: 0},
+	}
+	withConfigStub(t, cfg)
+	if got := detectServerFromConfig(); got != nil {
+		t.Errorf("expected nil for port=0, got %+v", got)
+	}
+}
+
+func TestDetectServerFromConfig_NilOnEmptyTLS(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "0.0.0.0", Port: 8081, TLS: &config.TLSConfig{}},
+	}
+	withConfigStub(t, cfg)
+	d := detectServerFromConfig()
+	if d == nil {
+		t.Fatal("expected non-nil for valid port")
+	}
+	if d.scheme != "http" {
+		t.Errorf("expected http for empty TLS, got %q", d.scheme)
 	}
 }

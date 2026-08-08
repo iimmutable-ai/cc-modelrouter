@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iimmutable-ai/cc-modelrouter/internal/config"
 	"github.com/mattn/go-isatty"
 )
 
@@ -18,6 +19,9 @@ import (
 var (
 	detectPublicIPFn = detectPublicIP
 	isTTYFn          = func() bool { return isatty.IsTerminal(os.Stdin.Fd()) }
+	loadGlobalConfigFn = func() (*config.Config, error) {
+		return config.LoadRaw(config.GlobalConfigPath())
+	}
 )
 
 // detectPublicIP queries an external echo service to learn the server's
@@ -61,6 +65,66 @@ func detectPublicIP(ctx context.Context) (string, error) {
 	return ip, nil
 }
 
+// serverDetection holds server address components derived from the global config.
+type serverDetection struct {
+	scheme string
+	host   string
+	port   int
+}
+
+// detectServerFromConfig loads the global config and extracts the server
+// address components (scheme, host, port). Returns nil when no config
+// exists, port is unset, or the file cannot be read — the caller falls
+// through to the next precedence level.
+func detectServerFromConfig() *serverDetection {
+	cfg, err := loadGlobalConfigFn()
+	if err != nil {
+		return nil
+	}
+	sc := &cfg.Server
+	if sc.Port == 0 {
+		return nil
+	}
+	d := &serverDetection{port: sc.Port}
+	if sc.TLS != nil && sc.TLS.Enabled() {
+		d.scheme = "https"
+	} else {
+		d.scheme = "http"
+	}
+	switch {
+	case sc.TLS != nil && sc.TLS.Domain != "":
+		d.host = sc.TLS.Domain
+	case sc.Host == "" || sc.Host == "0.0.0.0":
+		d.host = "localhost"
+	default:
+		d.host = sc.Host
+	}
+	return d
+}
+
+// promptConfigDetection prints the server URL inferred from the global config
+// and asks the user to confirm. Returns true if accepted, false if the user
+// wants the full interactive prompt instead.
+func promptConfigDetection(reader *bufio.Reader, out io.Writer, d *serverDetection) bool {
+	u := buildBaseURL(d.scheme, d.host, d.port)
+	fmt.Fprintf(out, "Detected server from config: %s\n", u)
+	for {
+		fmt.Fprint(out, "Use this address? [Y/n]: ")
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "y", "yes":
+			return true
+		case "n", "no":
+			return false
+		default:
+			fmt.Fprintln(out, "Please answer y or n.")
+		}
+	}
+}
+
 // resolveServerAddress applies the flag precedence table and returns the final
 // base URL (e.g. "https://api.example.com", "http://10.0.0.5:8081", or
 // "http://localhost:8081").
@@ -71,8 +135,11 @@ func detectPublicIP(ctx context.Context) (string, error) {
 //                        port = portFlag (if portExplicit) or defaultPortFor(scheme)
 //  3. ipFlag set      → scheme = schemeFlag or defaultSchemeFor("ip") (http);
 //                        port = portFlag (if portExplicit) or defaultPortFor(scheme)
-//  4. stdin not a TTY → http://localhost:<port>, no network call
-//  5. stdin is a TTY  → 3-option prompt: Local / Domain / IP
+//  4. Config auto-detect → load ~/.cc-modelrouter/config.json, derive scheme/host/port
+//                        from server.tls and server.host/server.port. Silent on non-TTY;
+//                        Y/n confirm on TTY (falls through to step 6 on reject).
+//  5. stdin not a TTY → http://localhost:<port>, no network call
+//  6. stdin is a TTY  → 3-option prompt: Local / Domain / IP
 //     - Local  → localhost, http, no scheme prompt
 //     - Domain → scheme prompt (default https), FQDN prompt
 //     - IP     → scheme prompt (default http), detectPublicIP + confirm
@@ -115,7 +182,26 @@ func resolveServerAddress(urlFlag, ipFlag, domainFlag, schemeFlag string, portFl
 		return buildBaseURL(scheme, ipFlag, port), nil
 	}
 
-	// 4. Non-TTY: default to localhost, no network call, one-line summary.
+	// 4. Auto-detect from global config.
+	detected := detectServerFromConfig()
+	if detected != nil {
+		port := detected.port
+		if portExplicit {
+			port = portFlag
+		}
+		if !isTTYFn() {
+			return buildBaseURL(detected.scheme, detected.host, port), nil
+		}
+		reader := bufio.NewReader(in)
+		if promptConfigDetection(reader, out, detected) {
+			return buildBaseURL(detected.scheme, detected.host, port), nil
+		}
+		// User rejected — fall through to step 6 with the same reader
+		// so buffered input is preserved.
+		return resolveServerAddressTTY(reader, schemeFlag, portFlag, portExplicit, out)
+	}
+
+	// 5. Non-TTY: default to localhost, no network call, one-line summary.
 	if !isTTYFn() {
 		fmt.Fprintf(out, "Using server IP: localhost (local)\n")
 		port := 8081
@@ -125,9 +211,14 @@ func resolveServerAddress(urlFlag, ipFlag, domainFlag, schemeFlag string, portFl
 		return buildBaseURL("http", "localhost", port), nil
 	}
 
-	// 5. TTY: prompt deployment type.
-	reader := bufio.NewReader(in)
+	// 6. TTY: prompt deployment type.
+	return resolveServerAddressTTY(bufio.NewReader(in), schemeFlag, portFlag, portExplicit, out)
+}
 
+// resolveServerAddressTTY runs the full interactive prompt (deployment type,
+// scheme, domain/IP, port). Extracted so both the direct TTY path and the
+// "config rejected" fallback share the same logic and bufio.Reader.
+func resolveServerAddressTTY(reader *bufio.Reader, schemeFlag string, portFlag int, portExplicit bool, out io.Writer) (string, error) {
 	choice, err := promptDeploymentType(reader, out)
 	if err != nil {
 		return "", err
@@ -135,7 +226,6 @@ func resolveServerAddress(urlFlag, ipFlag, domainFlag, schemeFlag string, portFl
 
 	scheme := defaultSchemeFor(choice)
 	if choice != "local" {
-		// Pre-select the inferred scheme in the menu.
 		defaultChoice := "1" // HTTPS
 		if scheme == "http" {
 			defaultChoice = "2"
@@ -220,7 +310,6 @@ func promptScheme(reader *bufio.Reader, out io.Writer, defaultChoice string) (st
 
 		switch choice {
 		case "":
-			// Empty input → accept the shown default.
 			if defaultChoice == "2" {
 				return "http", nil
 			}

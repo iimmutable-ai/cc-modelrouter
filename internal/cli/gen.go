@@ -34,6 +34,11 @@ Claude Code to use the ccrouter proxy.
 
 The output uses Claude Code's env format with attribution disabled.
 
+When no flags are provided, the command auto-detects the server address from
+~/.cc-modelrouter/config.json (if it exists and has server settings). This
+makes "ccrouter gen settings" work out-of-the-box after "ccrouter setup server"
+or "ccrouter config".
+
 By default the command prompts for deployment type (local / domain / public IP)
 and detects the server's public IP when "IP" is chosen. Pass --url, --domain,
 or --ip to skip the prompt (scripting-friendly); in non-interactive sessions the
